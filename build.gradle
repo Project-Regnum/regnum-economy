@@ -30,6 +30,10 @@ dependencies {
 
 	// Fabric API. This is technically optional, but you probably want it anyway.
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+
+	// Nations has no published API artifact. Use the mod built from the pinned API commit.
+	modImplementation files(providers.gradleProperty('nations_jar')
+			.orElse("libs/regnum-nations-${project.nations_api_commit}.jar"))
 }
 
 processResources {

@@ -1,6 +1,9 @@
 package dev.regnum.economy.market;
 
 import com.mojang.logging.LogUtils;
+import dev.sakhno.regnum.nations.api.v1.EntityRef;
+import dev.regnum.economy.money.CoinBalances;
+import dev.regnum.economy.money.WalletPersistence;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
@@ -9,6 +12,8 @@ import net.minecraft.nbt.Tag;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.saveddata.SavedData;
 import net.minecraft.world.level.storage.LevelResource;
@@ -22,10 +27,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.IntSupplier;
 
 final class MarketData extends SavedData {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final int VERSION = 1;
+    private static final int VERSION = 2;
     private static final String FILE_ID = "regnum_economy_markets";
     static final int MAX_ORDERS = 128;
     static final int MAX_QUANTITY = 2304;
@@ -154,9 +160,10 @@ final class MarketData extends SavedData {
     }
 
     final Map<Site, Market> markets = new HashMap<>();
-    final Map<UUID, Treasury> treasuries = new HashMap<>();
+    final Map<EntityRef, Treasury> treasuries = new HashMap<>();
     int nextOrder = 1;
     private CompoundTag unreadable;
+    private List<Component> transactionMessages;
 
     static MarketData get(MinecraftServer server) {
         var storage = server.overworld().getDataStorage();
@@ -177,14 +184,60 @@ final class MarketData extends SavedData {
         return unreadable == null;
     }
 
+    int transaction(ServerPlayer player, IntSupplier action) {
+        if (!WalletPersistence.available(player.getServer())) return 0;
+        CompoundTag beforeMarket = save(new CompoundTag(), player.registryAccess());
+        CompoundTag beforePlayer = player.saveWithoutId(new CompoundTag());
+        List<Component> feedback = new ArrayList<>();
+        transactionMessages = feedback;
+        int result;
+        try {
+            result = action.getAsInt();
+        } catch (RuntimeException failure) {
+            LOGGER.error("Regnum market operation failed; restoring its original state", failure);
+            rollback(player, beforePlayer, beforeMarket);
+            return 0;
+        } finally {
+            transactionMessages = null;
+        }
+        if (result == 0) return 0;
+        if (WalletPersistence.commitMarket(player, save(new CompoundTag(), player.registryAccess()))) {
+            feedback.forEach(player::sendSystemMessage);
+            return result;
+        }
+        rollback(player, beforePlayer, beforeMarket);
+        return 0;
+    }
+
+    private static void rollback(ServerPlayer player, CompoundTag beforePlayer, CompoundTag beforeMarket) {
+        // A failed pre-commit write leaves no durable monetary mutation.
+        player.load(beforePlayer);
+        MarketData restored = load(beforeMarket, player.registryAccess());
+        restored.setDirty();
+        player.getServer().overworld().getDataStorage().set(FILE_ID, restored);
+        CoinBalances.sync(player);
+        player.containerMenu.broadcastFullState();
+        player.sendSystemMessage(Component.translatable("message.regnum-economy.wallet.save_failed"));
+    }
+
+    void success(ServerPlayer player, Component message) {
+        if (transactionMessages == null) player.sendSystemMessage(message);
+        else transactionMessages.add(message.copy());
+    }
+
     Treasury treasury(UUID city) {
-        return treasuries.computeIfAbsent(city, ignored -> new Treasury());
+        return treasury(EntityRef.city(city));
+    }
+
+    Treasury treasury(EntityRef entity) {
+        return treasuries.computeIfAbsent(entity, ignored -> new Treasury());
     }
 
     private static MarketData load(CompoundTag tag, HolderLookup.Provider registries) {
         MarketData data = new MarketData();
         try {
-            if (!tag.contains("version", Tag.TAG_INT) || tag.getInt("version") != VERSION) {
+            int version = tag.getInt("version");
+            if (!tag.contains("version", Tag.TAG_INT) || version < 1 || version > VERSION) {
                 throw new IllegalArgumentException("Unsupported market data");
             }
             data.nextOrder = tag.getInt("next_order");
@@ -206,11 +259,13 @@ final class MarketData extends SavedData {
             for (Tag value : compounds(tag, "treasuries")) {
                 CompoundTag entry = (CompoundTag) value;
                 Treasury treasury = new Treasury();
+                EntityRef entity = version == 1 ? EntityRef.city(entry.getUUID("city"))
+                        : new EntityRef(EntityRef.Scope.valueOf(entry.getString("scope")), entry.getUUID("entity"));
                 treasury.taxRate = entry.getInt("rate");
                 treasury.coins = entry.getLong("coins");
                 if (!entry.contains("rate", Tag.TAG_INT) || !entry.contains("coins", Tag.TAG_LONG)
                         || treasury.taxRate < 0 || treasury.taxRate > 100 || treasury.coins < 0
-                        || data.treasuries.putIfAbsent(entry.getUUID("city"), treasury) != null) {
+                        || data.treasuries.putIfAbsent(entity, treasury) != null) {
                     throw new IllegalArgumentException("Invalid treasury");
                 }
             }
@@ -281,7 +336,8 @@ final class MarketData extends SavedData {
         ListTag balances = new ListTag();
         for (var entry : treasuries.entrySet()) {
             CompoundTag treasury = new CompoundTag();
-            treasury.putUUID("city", entry.getKey());
+            treasury.putUUID("entity", entry.getKey().id());
+            treasury.putString("scope", entry.getKey().scope().name());
             treasury.putInt("rate", entry.getValue().taxRate);
             treasury.putLong("coins", entry.getValue().coins);
             balances.add(treasury);

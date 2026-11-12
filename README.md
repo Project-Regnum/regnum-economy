@@ -4,11 +4,11 @@ Economy module for Project Regnum (Minecraft Fabric 1.21.1).
 
 ## Coins
 
-- Your balance appears in a dedicated slot in the inventory. Hover over it to see the exact amount.
-- Use `/pay <player> <amount>` to transfer coins to an online player.
-- Administrators can issue coins with `/economy grant <player> <amount>`.
+- Your persistent wallet appears in a dedicated inventory UI slot. Click it (or use `/wallet`) to deposit a selected coin stack, deposit all coins, or withdraw physical coins. Withdrawals require inventory space. Amounts use copper units: 1 silver = 100 copper; 1 gold = 10,000 copper.
+- Use the trade GUI for player transfers. Physical coins go in item slots; virtual coins go in the money field.
+- Administrators can issue new currency with `/economy grant <player> <amount>` after enabling `/gamerule regnumEconomyIssuanceEnabled true`. Configure `regnumEconomyIssuanceMaxGrant` and `regnumEconomyIssuanceDailyPlayerLimit` for issuance limits. Issuance receipts persist with the recipient's account; withdrawal never issues new value.
 - When Minecraft credits a player with your death, they receive 10% of your balance by default, rounded down to whole coins. Use `/gamerule regnumEconomyDeathDropPercent <0–100>` to change the rate. Deaths without a credited player leave your balance intact.
-- Old pouch balances and legacy coin items are converted at 1 coin per copper, 100 per silver, and 10,000 per gold. Legacy coins carried at login or picked up from the world are credited automatically.
+- Old pouch balances retain their value and legacy coin items remain spendable through explicit pouch deposits. Coins carried at login or picked up remain physical items.
 
 ## Player trades
 
@@ -18,7 +18,7 @@ Once the trade opens, drag items into your offer slots or enter a coin amount. E
 
 ## City markets
 
-Install Regnum Nations to use city claims and city owners. Place a `regnum-economy:market` block in a claimed chunk and look at it while running `/market register`. The city owner or an operator can register and manage it. Without Nations, operators can use `/market register <name>` for standalone test markets. With Regnum Auth installed, both participants must log in before direct payments and trades; visitors also log in before using a market.
+Requires Regnum Nations API v1 from PR #20, commit `483330f8523f38c4bc13ae68e43335921dc8dc90`. Place a `regnum-economy:market` block in a claimed chunk and look at it while running `/market register`. Current Nations city permissions control market creation, management, tax and treasury actions; kingdom authority does not grant city authority. With Regnum Auth installed, both participants must log in before trading; visitors also log in before using a market.
 
 Right-click a registered market to see its offers and **My trades**. Use `/market sell <quantity> <price-per-item>` while holding the item, or `/market order <item> <quantity> <price-per-item>` to reserve coins for a purchase. Buy items with `/market buy <id> <quantity>` and fulfill buy orders with `/market deliver <id> <quantity>`. The owner of an offer can cancel it with `/market cancel <id>`. Use `/market claim` at the same market to collect goods, proceeds, and refunds. A purchase order matches the specified item and its components.
 
@@ -26,6 +26,6 @@ Use `/market tax <percent>` to set the city's fee for new offers, `/market treas
 
 When a city loses the market's claim, open orders stop trading. Their owners can still cancel them and collect goods or refunds. An operator can withdraw city funds from an inactive market. Withdraw remaining funds before closing the last market in a city. If an administrator replaced a registered market block, restore it at the same coordinates to regain access.
 
-Market orders and claims are saved with the world. Inventory and player balances are saved with player data. After a server crash, restore both from the same backup if you need to roll back.
+Open Economy → Treasury in Nations for separate city and kingdom virtual accounts. Deposits and withdrawals move funds to or from the same player pouch used by markets. Existing city treasuries migrate once to scoped city accounts, even where a legacy kingdom shares the city UUID. Economy operations journal player data and market escrow together and recover interrupted commits on startup. Restore the complete world backup for a manual rollback.
 
-Use JDK 25 for the Gradle build. The compiled mod targets Java 21. Run `.\gradlew.bat build` to create the JAR in `build/libs` or `.\gradlew.bat runClient` to try it locally.
+Use JDK 25 for Gradle; the mod targets Java 21. Build the pinned Nations source with its `remapJar` task, then run `.\gradlew.bat build -Pnations_jar=<path-to-Nations-jar>` (or place that JAR at `libs/regnum-nations-483330f8523f38c4bc13ae68e43335921dc8dc90.jar`). Output is in `build/libs`. The Nations dependency remains a separate installed mod.

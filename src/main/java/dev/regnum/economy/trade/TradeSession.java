@@ -2,6 +2,8 @@ package dev.regnum.economy.trade;
 
 import dev.regnum.economy.inventory.InventoryPlan;
 import dev.regnum.economy.money.CoinBalances;
+import dev.regnum.economy.money.WalletPersistence;
+import net.minecraft.nbt.CompoundTag;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
@@ -110,6 +112,12 @@ final class TradeSession {
     }
 
     private void complete() {
+        if (!first.player.containerMenu.getCarried().isEmpty() || !second.player.containerMenu.getCarried().isEmpty()) {
+            pause(TradePackets.State.INVENTORY_SPACE);
+            return;
+        }
+        CompoundTag beforeFirst = first.player.saveWithoutId(new CompoundTag());
+        CompoundTag beforeSecond = second.player.saveWithoutId(new CompoundTag());
         InventoryPlan firstInventory = new InventoryPlan(first.player.getInventory());
         InventoryPlan secondInventory = new InventoryPlan(second.player.getInventory());
         if (!fits(firstInventory, second.items) || !fits(secondInventory, first.items)) {
@@ -125,6 +133,18 @@ final class TradeSession {
         secondInventory.apply();
         TradeEscrow.save(first.player, List.of());
         TradeEscrow.save(second.player, List.of());
+        if (!WalletPersistence.commitPlayers(first.player, second.player)) {
+            first.player.load(beforeFirst);
+            second.player.load(beforeSecond);
+            CoinBalances.sync(first.player);
+            CoinBalances.sync(second.player);
+            first.player.containerMenu.broadcastFullState();
+            second.player.containerMenu.broadcastFullState();
+            pause(TradePackets.State.COIN_BALANCE);
+            first.player.sendSystemMessage(Component.translatable("message.regnum-economy.wallet.save_failed"));
+            second.player.sendSystemMessage(Component.translatable("message.regnum-economy.wallet.save_failed"));
+            return;
+        }
         finish(null, true);
     }
 
@@ -158,6 +178,7 @@ final class TradeSession {
         if (!success) {
             refund(first.player);
             refund(second.player);
+            WalletPersistence.commitPlayers(first.player, second.player);
         }
         notifyPlayers(success ? "completed" : "cancelled");
     }

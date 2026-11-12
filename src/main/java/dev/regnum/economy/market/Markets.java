@@ -6,6 +6,8 @@ import dev.regnum.economy.integration.NationsAccess;
 import dev.regnum.economy.inventory.InventoryPlan;
 import dev.regnum.economy.money.CoinBalances;
 import dev.regnum.economy.money.Denomination;
+import dev.sakhno.regnum.nations.api.v1.EconomyPermission;
+import dev.sakhno.regnum.nations.api.v1.EntityRef;
 import net.fabricmc.fabric.api.event.Event;
 import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
@@ -81,6 +83,7 @@ public final class Markets {
         });
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> SELECTED.remove(handler.player.getUUID()));
         MarketCommands.register();
+        TreasuryPackets.register();
     }
 
     static Component text(String key, Object... args) {
@@ -93,7 +96,8 @@ public final class Markets {
     }
 
     private static boolean canUse(ServerPlayer player) {
-        return player.isAlive() && !player.isSpectator() && AuthAccess.permits(player);
+        return player.isAlive() && !player.isSpectator() && AuthAccess.permits(player)
+                && player.containerMenu == player.inventoryMenu && player.containerMenu.getCarried().isEmpty();
     }
 
     private static Site lookingAtMarket(ServerPlayer player) {
@@ -150,15 +154,16 @@ public final class Markets {
         return market.standalone ? !NationsAccess.installed() : city != null;
     }
 
-    private static boolean manages(ServerPlayer player, Market market, NationsAccess.City city) {
-        if (player.hasPermissions(2)) {
-            return true;
-        }
-        return market.standalone ? market.founder.equals(player.getUUID())
-                : city != null && city.owner().equals(player.getUUID());
+    private static boolean manages(ServerPlayer player, Market market, EconomyPermission permission) {
+        return market.standalone ? player.hasPermissions(3) || market.founder.equals(player.getUUID())
+                : NationsAccess.permits(player, market.city, permission);
     }
 
     static int registerMarket(ServerPlayer player, String testName) {
+        return MarketData.get(player.server).transaction(player, () -> registerMarketImpl(player, testName));
+    }
+
+    private static int registerMarketImpl(ServerPlayer player, String testName) {
         if (!canUse(player)) {
             return fail(player, "login");
         }
@@ -179,8 +184,8 @@ public final class Markets {
         if (!standalone && city == null) {
             return fail(player, "needs_city");
         }
-        if (standalone ? !player.hasPermissions(2)
-                : !player.hasPermissions(2) && !city.owner().equals(player.getUUID())) {
+        if (standalone ? !player.hasPermissions(3)
+                : !NationsAccess.permits(player, city.id(), EconomyPermission.ECONOMY_CREATE_MARKET)) {
             return fail(player, "permission");
         }
         String name = standalone ? testName == null ? site.position().toShortString() : testName.strip() : city.name();
@@ -192,34 +197,38 @@ public final class Markets {
         data.markets.put(site, market);
         data.setDirty();
         SELECTED.put(player.getUUID(), site);
-        player.sendSystemMessage(text("registered", name));
+        data.success(player, text("registered", name));
         return 1;
     }
 
     static int closeMarket(ServerPlayer player) {
+        return MarketData.get(player.server).transaction(player, () -> closeMarketImpl(player));
+    }
+
+    private static int closeMarketImpl(ServerPlayer player) {
         var data = MarketData.get(player.server);
         Market market = selected(player, data);
         if (market == null) {
             return 0;
         }
-        if (!manages(player, market, owningCity(player, market))) {
+        if (!manages(player, market, EconomyPermission.ECONOMY_MANAGE_MARKET)) {
             return fail(player, "permission");
         }
         if (!market.orders.isEmpty() || market.claims.values().stream().anyMatch(claim -> !claim.empty())) {
             return fail(player, "assets_pending");
         }
-        var treasury = data.treasuries.get(market.city);
+        var treasury = data.treasuries.get(EntityRef.city(market.city));
         if (treasury != null && treasury.coins > 0
                 && data.markets.values().stream().noneMatch(other -> other != market && other.city.equals(market.city))) {
             return fail(player, "treasury_pending");
         }
         data.markets.remove(market.site);
         if (market.standalone) {
-            data.treasuries.remove(market.city);
+            data.treasuries.remove(EntityRef.city(market.city));
         }
         SELECTED.remove(player.getUUID());
         data.setDirty();
-        player.sendSystemMessage(text("closed"));
+        data.success(player, text("closed"));
         return 1;
     }
 
@@ -296,6 +305,10 @@ public final class Markets {
     }
 
     static int post(ServerPlayer player, Kind kind, ItemStack item, int quantity, long price) {
+        return MarketData.get(player.server).transaction(player, () -> postImpl(player, kind, item, quantity, price));
+    }
+
+    private static int postImpl(ServerPlayer player, Kind kind, ItemStack item, int quantity, long price) {
         var data = MarketData.get(player.server);
         Market market = selected(player, data);
         if (market == null) {
@@ -327,12 +340,16 @@ public final class Markets {
         market.orders.put(order.id, order);
         data.nextOrder++;
         data.setDirty();
-        player.sendSystemMessage(text("posted", order.id, Long.toString(order.total(quantity)),
+        data.success(player, text("posted", order.id, Long.toString(order.total(quantity)),
                 Long.toString(order.total(quantity) - order.tax(quantity))));
         return 1;
     }
 
     static int fulfill(ServerPlayer player, Kind kind, int id, int quantity) {
+        return MarketData.get(player.server).transaction(player, () -> fulfillImpl(player, kind, id, quantity));
+    }
+
+    private static int fulfillImpl(ServerPlayer player, Kind kind, int id, int quantity) {
         var data = MarketData.get(player.server);
         Market market = selected(player, data);
         if (market == null) {
@@ -386,7 +403,7 @@ public final class Markets {
             market.orders.remove(id);
         }
         data.setDirty();
-        player.sendSystemMessage(text("filled", quantity, order.item.getHoverName(), Long.toString(gross),
+        data.success(player, text("filled", quantity, order.item.getHoverName(), Long.toString(gross),
                 Long.toString(net)).copy().append(" ").append(action("claim_action", "/market claim", ClickEvent.Action.RUN_COMMAND)));
         return 1;
     }
@@ -429,6 +446,10 @@ public final class Markets {
     }
 
     static int cancel(ServerPlayer player, int id) {
+        return MarketData.get(player.server).transaction(player, () -> cancelImpl(player, id));
+    }
+
+    private static int cancelImpl(ServerPlayer player, int id) {
         var data = MarketData.get(player.server);
         Market market = selected(player, data);
         if (market == null) {
@@ -450,12 +471,16 @@ public final class Markets {
         }
         market.orders.remove(id);
         data.setDirty();
-        player.sendSystemMessage(text("cancelled").copy().append(" ")
+        data.success(player, text("cancelled").copy().append(" ")
                 .append(action("claim_action", "/market claim", ClickEvent.Action.RUN_COMMAND)));
         return 1;
     }
 
     static int claim(ServerPlayer player) {
+        return MarketData.get(player.server).transaction(player, () -> claimImpl(player));
+    }
+
+    private static int claimImpl(ServerPlayer player) {
         var data = MarketData.get(player.server);
         Market market = selected(player, data);
         if (market == null) {
@@ -491,18 +516,26 @@ public final class Markets {
             market.claims.remove(player.getUUID());
         }
         data.setDirty();
-        player.sendSystemMessage(text("claimed", receivedItems, Long.toString(coins)));
+        data.success(player, text("claimed", receivedItems, Long.toString(coins)));
         return 1;
     }
 
     static int treasury(ServerPlayer player, Integer rate, long withdraw) {
+        return rate == null && withdraw == 0 ? treasuryImpl(player, null, 0)
+                : MarketData.get(player.server).transaction(player, () -> treasuryImpl(player, rate, withdraw));
+    }
+
+    private static int treasuryImpl(ServerPlayer player, Integer rate, long withdraw) {
         var data = MarketData.get(player.server);
         Market market = selected(player, data);
         if (market == null) {
             return 0;
         }
         var city = owningCity(player, market);
-        if (!manages(player, market, city) || (rate != null && !active(market, city))) {
+        EconomyPermission permission = rate != null ? EconomyPermission.ECONOMY_SET_TAX
+                : withdraw > 0 ? EconomyPermission.ECONOMY_WITHDRAW_TREASURY : EconomyPermission.ECONOMY_VIEW_TREASURY;
+        if (!manages(player, market, permission) || !manages(player, market, EconomyPermission.ECONOMY_VIEW_TREASURY)
+                || (rate != null && !active(market, city))) {
             return fail(player, "permission");
         }
         Treasury treasury = data.treasury(market.city);
@@ -520,7 +553,7 @@ public final class Markets {
             treasury.coins -= withdraw;
             data.setDirty();
         }
-        player.sendSystemMessage(text("treasury", Long.toString(treasury.coins), treasury.taxRate));
+        data.success(player, text("treasury", Long.toString(treasury.coins), treasury.taxRate));
         return 1;
     }
 }

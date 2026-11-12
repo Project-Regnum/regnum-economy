@@ -1,6 +1,8 @@
 package dev.regnum.economy.trade;
 
 import dev.regnum.economy.RegnumEconomy;
+import dev.regnum.economy.money.WalletPersistence;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerPlayer;
@@ -13,6 +15,8 @@ import net.minecraft.world.inventory.ClickType;
 import net.minecraft.world.inventory.MenuType;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
+import java.util.ArrayList;
+import java.util.List;
 
 public final class TradeMenu extends AbstractContainerMenu {
     public static final int INVENTORY_X = 42;
@@ -127,7 +131,24 @@ public final class TradeMenu extends AbstractContainerMenu {
                 && (slot >= OFFER_SLOTS || locked() || type == ClickType.THROW || type == ClickType.CLONE))) {
             return;
         }
+        if (!(player instanceof ServerPlayer serverPlayer)) {
+            super.clicked(slot, button, type, player);
+            return;
+        }
+        if (!WalletPersistence.available(serverPlayer.getServer())) return;
+        CompoundTag before = serverPlayer.saveWithoutId(new CompoundTag());
+        List<ItemStack> beforeOffer = new ArrayList<>();
+        for (int i = 0; i < ownItems.getContainerSize(); i++) beforeOffer.add(ownItems.getItem(i).copy());
+        ItemStack beforeCursor = getCarried().copy();
         super.clicked(slot, button, type, player);
+        TradeEscrow.saveCursor(serverPlayer, getCarried());
+        if (!before.equals(serverPlayer.saveWithoutId(new CompoundTag())) && !WalletPersistence.commit(serverPlayer)) {
+            for (int i = 0; i < beforeOffer.size(); i++) ownItems.setItem(i, beforeOffer.get(i));
+            serverPlayer.load(before);
+            setCarried(beforeCursor);
+            broadcastFullState();
+            serverPlayer.sendSystemMessage(net.minecraft.network.chat.Component.translatable("message.regnum-economy.wallet.save_failed"));
+        }
     }
 
     @Override
@@ -169,6 +190,7 @@ public final class TradeMenu extends AbstractContainerMenu {
     public void removed(Player player) {
         super.removed(player);
         if (session != null && player instanceof ServerPlayer serverPlayer) {
+            TradeEscrow.saveCursor(serverPlayer, ItemStack.EMPTY);
             session.cancel(serverPlayer);
         }
     }

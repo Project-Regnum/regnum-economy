@@ -2,11 +2,14 @@ package dev.regnum.economy.client;
 
 import dev.regnum.economy.RegnumEconomy;
 import dev.regnum.economy.client.mixin.ContainerScreenAccess;
+import dev.regnum.economy.money.WalletPackets;
+import dev.sakhno.regnum.nations.client.ui.KingdomUi;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
 import net.fabricmc.fabric.api.client.screen.v1.Screens;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.client.gui.components.AbstractWidget;
+import net.minecraft.client.gui.components.AbstractButton;
 import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.narration.NarratedElementType;
 import net.minecraft.client.gui.narration.NarrationElementOutput;
@@ -16,7 +19,7 @@ import net.minecraft.client.gui.screens.inventory.InventoryScreen;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 
-final class BalanceSlot extends AbstractWidget {
+final class BalanceSlot extends AbstractButton {
     private static final ResourceLocation ICON = RegnumEconomy.id("textures/item/gold_coin.png");
     private static final String[] UNITS = {"", "k", "M", "B", "T", "Qa", "Qi"};
     private static long balance = -1;
@@ -74,16 +77,18 @@ final class BalanceSlot extends AbstractWidget {
     }
 
     @Override
-    public boolean mouseClicked(double x, double y, int button) {
-        return isMouseOver(x, y);
+    public void onPress() {
+        if (ClientPlayNetworking.canSend(WalletPackets.Open.TYPE)) {
+            ClientPlayNetworking.send(new WalletPackets.Open());
+        }
     }
 
     @Override
     protected void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
         int x = getX();
         int y = getY();
-        graphics.fill(x, y, x + 20, y + 20, isHoveredOrFocused() ? 0xffffffff : 0xff373737);
-        graphics.fill(x + 1, y + 1, x + 19, y + 19, 0xff8b8b8b);
+        graphics.fill(x, y, x + 20, y + 20, isHoveredOrFocused() ? KingdomUi.INK : KingdomUi.GOLD);
+        graphics.fill(x + 1, y + 1, x + 19, y + 19, KingdomUi.RECESS);
         graphics.blit(ICON, x + 2, y + 2, 0f, 0f, 16, 16, 16, 16);
         int width = client.font.width(displayCount);
         float scale = Math.min(1f, 18f / Math.max(1, width));

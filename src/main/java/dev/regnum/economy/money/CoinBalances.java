@@ -13,7 +13,6 @@ import net.fabricmc.fabric.api.gamerule.v1.GameRuleRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.GameRules;
 
 import java.util.HashMap;
@@ -82,57 +81,49 @@ public final class CoinBalances {
         if (SYNCED.put(player.getUUID(), player) == player) {
             return;
         }
-        var inventory = player.getInventory();
-        long balance = get(player);
-        long redeemed = redeemLegacyStacks(inventory.items, Long.MAX_VALUE - balance);
-        redeemed += redeemLegacyStacks(inventory.offhand, Long.MAX_VALUE - balance - redeemed);
-        if (redeemed > 0) {
-            player.setAttached(BALANCE, balance + redeemed);
-            inventory.setChanged();
-        }
         BalancePayload.sendTo(player);
     }
 
-    private static long redeemLegacyStacks(Iterable<ItemStack> stacks, long capacity) {
-        long redeemed = 0;
-        for (ItemStack stack : stacks) {
-            Denomination coin = Denomination.of(stack);
-            if (coin != null) {
-                long value = (long) coin.copperValue() * stack.getCount();
-                if (value <= capacity - redeemed) {
-                    redeemed += value;
-                    stack.setCount(0);
-                }
-            }
+    static void set(ServerPlayer player, long amount) {
+        if (!player.getServer().isSameThread() || amount < 0) {
+            throw new IllegalStateException("Invalid wallet mutation");
         }
-        return redeemed;
+        player.setAttached(BALANCE, amount);
     }
 
     public static long get(ServerPlayer player) {
         return player.getAttachedOrElse(BALANCE, 0L);
     }
 
+    public static void sync(ServerPlayer player) {
+        BalancePayload.sendTo(player);
+        player.containerMenu.broadcastChanges();
+    }
+
     public static boolean credit(ServerPlayer player, long amount) {
         long balance = get(player);
-        if (amount < 1 || amount > Long.MAX_VALUE - balance) {
+        if (!WalletPersistence.available(player.getServer()) || amount < 1 || amount > Long.MAX_VALUE - balance) {
             return false;
         }
-        player.setAttached(BALANCE, balance + amount);
+        set(player, balance + amount);
         BalancePayload.sendTo(player);
         return true;
     }
 
     public static boolean debit(ServerPlayer player, long amount) {
         long balance = get(player);
-        if (amount < 1 || amount > balance) {
+        if (!WalletPersistence.available(player.getServer()) || amount < 1 || amount > balance) {
             return false;
         }
-        player.setAttached(BALANCE, balance - amount);
+        set(player, balance - amount);
         BalancePayload.sendTo(player);
         return true;
     }
 
     public static TransferResult transfer(ServerPlayer from, ServerPlayer to, long amount) {
+        if (from.getServer() != to.getServer() || !WalletPersistence.available(from.getServer())) {
+            return TransferResult.INSUFFICIENT_FUNDS;
+        }
         if (from.getUUID().equals(to.getUUID())) {
             return TransferResult.SAME_PLAYER;
         }
@@ -145,8 +136,13 @@ public final class CoinBalances {
             return TransferResult.RECIPIENT_LIMIT;
         }
 
-        from.setAttached(BALANCE, available - amount);
-        to.setAttached(BALANCE, recipientBalance + amount);
+        set(from, available - amount);
+        set(to, recipientBalance + amount);
+        if (!WalletPersistence.commitPlayers(from, to)) {
+            set(from, available);
+            set(to, recipientBalance);
+            return TransferResult.INSUFFICIENT_FUNDS;
+        }
         BalancePayload.sendTo(from);
         BalancePayload.sendTo(to);
         return TransferResult.SUCCESS;
@@ -155,7 +151,9 @@ public final class CoinBalances {
     public static boolean exchange(ServerPlayer first, long firstOffer, ServerPlayer second, long secondOffer) {
         long firstBalance = get(first);
         long secondBalance = get(second);
-        if (first == second || firstOffer < 0 || secondOffer < 0
+        if (first.getUUID().equals(second.getUUID()) || first.getServer() != second.getServer()
+                || !WalletPersistence.available(first.getServer())
+                || firstOffer < 0 || secondOffer < 0
                 || firstOffer > firstBalance || secondOffer > secondBalance) {
             return false;
         }
@@ -166,21 +164,11 @@ public final class CoinBalances {
         }
 
         if (firstOffer != secondOffer) {
-            first.setAttached(BALANCE, firstRemaining + secondOffer);
-            second.setAttached(BALANCE, secondRemaining + firstOffer);
+            set(first, firstRemaining + secondOffer);
+            set(second, secondRemaining + firstOffer);
             BalancePayload.sendTo(first);
             BalancePayload.sendTo(second);
         }
-        return true;
-    }
-
-    public static boolean redeemLegacyStack(ServerPlayer player, ItemStack stack) {
-        Denomination coin = Denomination.of(stack);
-        if (coin == null || !AuthAccess.permits(player) || !credit(player, (long) coin.copperValue() * stack.getCount())) {
-            return false;
-        }
-
-        stack.setCount(0);
         return true;
     }
 
