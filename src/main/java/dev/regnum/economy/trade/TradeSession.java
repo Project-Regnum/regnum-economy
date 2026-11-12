@@ -27,6 +27,11 @@ final class TradeSession {
     private int ticks;
     private int issue;
     private boolean closed;
+    private boolean settlementCommitted;
+    private boolean cancelling;
+    private boolean cancellationQueued;
+    private boolean cancellationInProgress;
+    private boolean pendingNotified;
 
     TradeSession(ServerPlayer first, ServerPlayer second) {
         this.first = new Side(first);
@@ -44,7 +49,10 @@ final class TradeSession {
 
     private boolean open(Side side, Side other) {
         return side.player.openMenu(new SimpleMenuProvider(
-                (id, inventory, player) -> new TradeMenu(id, inventory, this, side, other),
+                (id, inventory, player) -> {
+                    side.menu = new TradeMenu(id, inventory, this, side, other);
+                    return side.menu;
+                },
                 Component.translatable("container.regnum-economy.trade", other.player.getDisplayName()))).isPresent();
     }
 
@@ -65,11 +73,11 @@ final class TradeSession {
         revision++;
         if (action.action() == TradePackets.Action.CANCEL) {
             cancel(null);
+            return;
         } else if (action.action() == TradePackets.Action.OFFER_COINS && !locked()
                 && action.coins() >= 0 && side.coins != action.coins()) {
             side.coins = action.coins();
             resetConfirmations();
-            sync();
         } else if (action.action() == TradePackets.Action.CONFIRM) {
             if (side.confirmed) {
                 resetConfirmations();
@@ -80,7 +88,6 @@ final class TradeSession {
                     ticks = COUNTDOWN_TICKS;
                 }
             }
-            sync();
         }
         sync();
     }
@@ -100,7 +107,7 @@ final class TradeSession {
     }
 
     boolean canInteract() {
-        return !closed && Trades.inRange(first.player, second.player)
+        return !closed && !cancelling && Trades.inRange(first.player, second.player)
                 && Trades.bothAuthenticated(first.player, second.player);
     }
 
@@ -143,9 +150,11 @@ final class TradeSession {
             TradeEscrow.save(first.player, List.of());
             TradeEscrow.save(second.player, List.of());
             saved = operation.commit();
+            settlementCommitted = saved; // Set before close() can run deferred lifecycle cleanup.
         } catch (RuntimeException failure) {
             LogUtils.getLogger().error("Trade completion failed", failure);
         }
+        if (closed || !saved && cancelling) return;
         if (!saved) {
             pause(TradePackets.State.SAVE_FAILED);
             notifyPlayers("save_failed");
@@ -171,28 +180,72 @@ final class TradeSession {
     }
 
     void cancel(ServerPlayer closingPlayer) {
-        if (closed) return;
+        if (closed || settlementCommitted || cancellationQueued || cancellationInProgress) return;
+        cancelling = true;
+        if (WalletPersistence.afterCurrentOperation(first.player.getServer(), () -> {
+            cancellationQueued = false;
+            cancel(closingPlayer);
+        })) {
+            cancellationQueued = true;
+            return;
+        }
+        if (!WalletPersistence.available(first.player.getServer())) {
+            notifyPending();
+            return; // Keep live ownership intact until the already-stopping server recovers.
+        }
         boolean saved = false;
         boolean firstReturned = false, secondReturned = false;
+        ItemStack firstCursor = cursor(first), secondCursor = cursor(second);
+        cancellationInProgress = true;
         try (var operation = WalletPersistence.begin(first.player, second.player)) {
-            firstReturned = TradeEscrow.stageReturn(first.player, first.items.getItems(), cursor(first));
-            secondReturned = TradeEscrow.stageReturn(second.player, second.items.getItems(), cursor(second));
-            if (viewing(first)) first.player.containerMenu.setCarried(ItemStack.EMPTY);
-            if (viewing(second)) second.player.containerMenu.setCarried(ItemStack.EMPTY);
+            // A removed menu may no longer be player.containerMenu, so the generic player
+            // snapshot cannot restore its cursor. Retain that ownership explicitly.
+            operation.onRollback(() -> {
+                if (first.menu != null) first.menu.setCarried(firstCursor.copy());
+                if (second.menu != null) second.menu.setCarried(secondCursor.copy());
+            });
+            firstReturned = TradeEscrow.stageReturn(first.player, first.items.getItems(), firstCursor);
+            secondReturned = TradeEscrow.stageReturn(second.player, second.items.getItems(), secondCursor);
+            if (first.menu != null) first.menu.setCarried(ItemStack.EMPTY);
+            if (second.menu != null) second.menu.setCarried(ItemStack.EMPTY);
             saved = operation.commit();
         } catch (RuntimeException failure) {
             LogUtils.getLogger().error("Trade cancellation could not commit; returns remain in escrow", failure);
+        } finally {
+            cancellationInProgress = false;
         }
-        // On failure, rollback restored each durable escrow/cursor receipt. Clear only the
-        // live menu cursor before closing; pending-claim restoration can retry later.
+        if (!saved && (!WalletPersistence.available(first.player.getServer())
+                || !TradeEscrow.covers(first.player, first.items.getItems(), cursor(first))
+                || !TradeEscrow.covers(second.player, second.items.getItems(), cursor(second)))) {
+            if (WalletPersistence.available(first.player.getServer())) {
+                WalletPersistence.stopForRecovery(first.player.getServer(), "Trade live items do not match their recoverable escrow receipts");
+            }
+            notifyPending();
+            return;
+        }
+        // A committed return or both verified pre-operation receipts own every live stack.
         finish(closingPlayer);
-        if (saved) notifyPlayers("cancelled");
-        if (!saved || !firstReturned) first.player.sendSystemMessage(Component.translatable(MESSAGE + "refund_pending"));
-        if (!saved || !secondReturned) second.player.sendSystemMessage(Component.translatable(MESSAGE + "refund_pending"));
+        if (!saved) notifyPlayers("refund_failed");
+        else {
+            notifyPlayers("cancelled");
+            if (!firstReturned) first.player.sendSystemMessage(Component.translatable(MESSAGE + "refund_pending"));
+            if (!secondReturned) second.player.sendSystemMessage(Component.translatable(MESSAGE + "refund_pending"));
+        }
     }
 
     private ItemStack cursor(Side side) {
-        return viewing(side) ? side.player.containerMenu.getCarried().copy() : ItemStack.EMPTY;
+        return side.menu == null ? ItemStack.EMPTY : side.menu.getCarried().copy();
+    }
+
+    boolean finished() {
+        return closed;
+    }
+
+    private void notifyPending() {
+        if (!pendingNotified) {
+            pendingNotified = true;
+            notifyPlayers(WalletPersistence.available(first.player.getServer()) ? "refund_pending" : "unavailable");
+        }
     }
 
     private void finish(ServerPlayer closingPlayer) {
@@ -201,8 +254,8 @@ final class TradeSession {
         }
         closed = true;
         Trades.forget(this);
-        if (viewing(first)) first.player.containerMenu.setCarried(ItemStack.EMPTY);
-        if (viewing(second)) second.player.containerMenu.setCarried(ItemStack.EMPTY);
+        if (first.menu != null) first.menu.setCarried(ItemStack.EMPTY);
+        if (second.menu != null) second.menu.setCarried(ItemStack.EMPTY);
         first.items.clearContent();
         second.items.clearContent();
         close(first, closingPlayer);
@@ -245,6 +298,7 @@ final class TradeSession {
     final class Side {
         final ServerPlayer player;
         final SimpleContainer items = new SimpleContainer(TradeMenu.OFFER_SLOTS);
+        private TradeMenu menu;
         private List<ItemStack> snapshot = Collections.nCopies(TradeMenu.OFFER_SLOTS, ItemStack.EMPTY);
         private long coins;
         private boolean confirmed;

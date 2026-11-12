@@ -97,6 +97,7 @@
   "message.regnum-economy.trade.distance": "Ви маєте бути в одному вимірі на відстані до 8 блоків.",
   "message.regnum-economy.trade.busy": "Обидва гравці мають спершу закрити інші вікна й угоди.",
   "message.regnum-economy.trade.refund_pending": "Звільни місце в інвентарі, щоб отримати предмети з попереднього обміну.",
+  "message.regnum-economy.trade.refund_failed": "Не вдалося зберегти повернення предметів. Вони залишаються в сховищі обміну; спробуй пізніше.",
   "message.regnum-economy.trade.space": "Звільніть місце в інвентарі й підтвердьте угоду знову.",
   "message.regnum-economy.trade.balance": "Баланси гравців не дозволяють провести цей обмін.",
   "message.regnum-economy.trade.completed": "Обмін завершено.",

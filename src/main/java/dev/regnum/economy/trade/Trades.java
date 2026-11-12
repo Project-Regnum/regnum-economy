@@ -74,6 +74,8 @@ public final class Trades {
                 session.cancel(null);
             }
         });
+        ServerLifecycleEvents.SERVER_STOPPED.register(server ->
+                ACTIVE.keySet().removeIf(player -> player.getServer() == server));
     }
 
     private static int request(CommandSourceStack source, ServerPlayer first, ServerPlayer second) {
@@ -114,7 +116,15 @@ public final class Trades {
         if (blocked != null) {
             return fail(source, blocked);
         }
-        if (!TradeEscrow.restore(first) || !TradeEscrow.restore(second)) {
+        var firstReturn = TradeEscrow.restore(first);
+        var secondReturn = TradeEscrow.restore(second);
+        if (firstReturn == TradeEscrow.RestoreResult.RECOVERY_PENDING || secondReturn == TradeEscrow.RestoreResult.RECOVERY_PENDING) {
+            return fail(source, "unavailable");
+        }
+        if (firstReturn == TradeEscrow.RestoreResult.FAILED || secondReturn == TradeEscrow.RestoreResult.FAILED) {
+            return fail(source, "refund_failed");
+        }
+        if (firstReturn != TradeEscrow.RestoreResult.COMPLETE || secondReturn != TradeEscrow.RestoreResult.COMPLETE) {
             return fail(source, "refund_pending");
         }
         REQUESTS.remove(first);

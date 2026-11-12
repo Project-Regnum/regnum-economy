@@ -84,6 +84,21 @@ public final class WalletPersistence {
         return new Operation(List.of(players));
     }
 
+    /** Lifecycle cleanup must wait until the current inventory operation has committed or rolled back. */
+    public static boolean afterCurrentOperation(MinecraftServer server, Runnable action) {
+        if (!server.isSameThread()) throw new IllegalStateException("Economy cleanup requires the server thread");
+        Operation operation = ACTIVE.get(server);
+        if (operation == null) return false;
+        operation.afterClose.add(java.util.Objects.requireNonNull(action));
+        return true;
+    }
+
+    public static void stopForRecovery(MinecraftServer server, String reason) {
+        LOCKED.add(server);
+        LogUtils.getLogger().error("Economy stopped for recovery: {}", reason);
+        server.halt(false);
+    }
+
     /** Register only Economy-owned attachment snapshots during common mod initialization. */
     public static void registerPlayerState(Function<ServerPlayer, Runnable> snapshot) {
         PLAYER_STATE.add(java.util.Objects.requireNonNull(snapshot));
@@ -100,6 +115,7 @@ public final class WalletPersistence {
         private final MinecraftServer server;
         private final Map<ServerPlayer, PlayerSnapshot> before = new LinkedHashMap<>();
         private final List<Runnable> rollback = new ArrayList<>();
+        private final List<Runnable> afterClose = new ArrayList<>();
         private boolean attempted;
         private boolean committed;
         private boolean closed;
@@ -181,6 +197,7 @@ public final class WalletPersistence {
                 LOCKED.add(server);
                 LogUtils.getLogger().error("Economy rollback failed; stopping instead of continuing with partial state", failure);
                 server.halt(false);
+                finishCleanup();
                 throw failure;
             }
             for (ServerPlayer player : before.keySet()) {
@@ -190,6 +207,17 @@ public final class WalletPersistence {
                 } catch (RuntimeException exception) {
                     // Notification failure cannot turn a durable commit into a failed payment.
                     LogUtils.getLogger().warn("Could not synchronize economy state for {} after operation", player.getUUID(), exception);
+                }
+            }
+            finishCleanup();
+        }
+
+        private void finishCleanup() {
+            for (Runnable cleanup : afterClose) {
+                try { cleanup.run(); }
+                catch (RuntimeException failure) {
+                    LogUtils.getLogger().error("Deferred economy cleanup failed", failure);
+                    stopForRecovery(server, "Deferred cleanup could not preserve ownership");
                 }
             }
         }

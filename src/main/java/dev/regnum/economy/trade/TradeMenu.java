@@ -200,6 +200,7 @@ public final class TradeMenu extends AbstractContainerMenu {
     public void removed(Player player) {
         if (session != null && player instanceof ServerPlayer serverPlayer) {
             session.cancel(serverPlayer);
+            if (!session.finished()) return; // The session still owns this cursor while cleanup is deferred/frozen.
             // Cancellation either committed this cursor's return or kept its durable receipt.
             // Vanilla must not independently insert/drop another copy after a failed save.
             setCarried(ItemStack.EMPTY);

@@ -11,8 +11,13 @@ import net.minecraft.world.item.ItemStack;
 
 import java.util.ArrayList;
 import java.util.List;
+import com.mojang.logging.LogUtils;
 
 final class TradeEscrow {
+    enum RestoreResult {
+        NOTHING_RESTORED, PARTIAL, COMPLETE, FAILED, RECOVERY_PENDING
+    }
+
     private static final AttachmentType<List<ItemStack>> ITEMS = AttachmentRegistry.<List<ItemStack>>builder()
             .persistent(ItemStack.CODEC.listOf())
             .copyOnDeath()
@@ -52,17 +57,25 @@ final class TradeEscrow {
         else player.setAttached(CURSOR, stack.copy());
     }
 
-    static boolean restore(ServerPlayer player) {
+    /** Receipts are changed only inside an operation; compare them before releasing a failed trade's live state. */
+    static boolean covers(ServerPlayer player, List<ItemStack> offered, ItemStack cursor) {
+        List<ItemStack> items = offered.stream().filter(stack -> !stack.isEmpty()).toList();
+        return ItemStack.listMatches(player.getAttachedOrElse(ITEMS, List.of()), items)
+                && ItemStack.matches(player.getAttachedOrElse(CURSOR, ItemStack.EMPTY), cursor);
+    }
+
+    static RestoreResult restore(ServerPlayer player) {
         List<ItemStack> offered = player.getAttachedOrElse(ITEMS, List.of());
         ItemStack cursor = player.getAttachedOrElse(CURSOR, ItemStack.EMPTY);
         List<ItemStack> pending = new ArrayList<>(offered);
         if (!cursor.isEmpty()) pending.add(cursor);
         if (pending.isEmpty()) {
-            return true;
+            return RestoreResult.COMPLETE;
         }
-        if (!AuthAccess.permits(player) || !WalletPersistence.available(player.getServer())
+        if (!WalletPersistence.available(player.getServer())) return RestoreResult.RECOVERY_PENDING;
+        if (!AuthAccess.permits(player) || !player.isAlive() || player.hasDisconnected()
                 || player.containerMenu != player.inventoryMenu || !player.containerMenu.getCarried().isEmpty()) {
-            return false;
+            return RestoreResult.NOTHING_RESTORED;
         }
         InventoryPlan inventory = new InventoryPlan(player.getInventory());
         List<ItemStack> remaining = new ArrayList<>();
@@ -73,14 +86,21 @@ final class TradeEscrow {
             }
         }
         if (ItemStack.listMatches(pending, remaining)) {
-            return false;
+            return RestoreResult.NOTHING_RESTORED;
         }
+        boolean committed;
         try (var operation = WalletPersistence.begin(player)) {
             inventory.apply();
             save(player, remaining);
             saveCursor(player, ItemStack.EMPTY);
-            return operation.commit() && remaining.isEmpty();
+            committed = operation.commit();
+        } catch (RuntimeException failure) {
+            LogUtils.getLogger().error("Trade escrow return failed; the claim was not released", failure);
+            return WalletPersistence.available(player.getServer()) ? RestoreResult.FAILED : RestoreResult.RECOVERY_PENDING;
         }
+        if (!WalletPersistence.available(player.getServer())) return RestoreResult.RECOVERY_PENDING;
+        if (!committed) return RestoreResult.FAILED;
+        return remaining.isEmpty() ? RestoreResult.COMPLETE : RestoreResult.PARTIAL;
     }
 
     /** Stage one participant's cancellation return, without committing it independently. */

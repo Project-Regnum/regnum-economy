@@ -97,6 +97,7 @@
   "message.regnum-economy.trade.distance": "Both players must be within 8 blocks in the same dimension.",
   "message.regnum-economy.trade.busy": "Both players must close other menus and trades first.",
   "message.regnum-economy.trade.refund_pending": "Make inventory space to receive items from the previous trade.",
+  "message.regnum-economy.trade.refund_failed": "The returned items could not be saved. They remain in escrow; try again later.",
   "message.regnum-economy.trade.space": "Make inventory space before confirming again.",
   "message.regnum-economy.trade.balance": "The balances cannot cover this exchange.",
   "message.regnum-economy.trade.completed": "Trade completed.",
