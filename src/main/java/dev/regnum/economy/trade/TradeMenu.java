@@ -2,7 +2,7 @@ package dev.regnum.economy.trade;
 
 import dev.regnum.economy.RegnumEconomy;
 import dev.regnum.economy.money.WalletPersistence;
-import net.minecraft.nbt.CompoundTag;
+import com.mojang.logging.LogUtils;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerPlayer;
@@ -107,7 +107,8 @@ public final class TradeMenu extends AbstractContainerMenu {
     }
 
     public void setState(TradePackets.State state) {
-        if (session == null && state.menuId() == containerId) {
+        if (session == null && state.menuId() == containerId
+                && (this.state == null || this.state.session().equals(state.session()) && state.revision() >= this.state.revision())) {
             this.state = state;
         }
     }
@@ -127,6 +128,12 @@ public final class TradeMenu extends AbstractContainerMenu {
 
     @Override
     public void clicked(int slot, int button, ClickType type, Player player) {
+        // A world drop cannot be rolled back with the two inventories and their escrow.
+        if (type == ClickType.THROW || type == ClickType.CLONE || slot < 0 && type != ClickType.QUICK_CRAFT) {
+            if (player instanceof ServerPlayer) player.displayClientMessage(
+                    net.minecraft.network.chat.Component.translatable("message.regnum-economy.trade.no_drop"), true);
+            return;
+        }
         if (!stillValid(player) || (slot >= 0 && slot < INVENTORY_START
                 && (slot >= OFFER_SLOTS || locked() || type == ClickType.THROW || type == ClickType.CLONE))) {
             return;
@@ -136,17 +143,20 @@ public final class TradeMenu extends AbstractContainerMenu {
             return;
         }
         if (!WalletPersistence.available(serverPlayer.getServer())) return;
-        CompoundTag before = serverPlayer.saveWithoutId(new CompoundTag());
         List<ItemStack> beforeOffer = new ArrayList<>();
         for (int i = 0; i < ownItems.getContainerSize(); i++) beforeOffer.add(ownItems.getItem(i).copy());
-        ItemStack beforeCursor = getCarried().copy();
-        super.clicked(slot, button, type, player);
-        TradeEscrow.saveCursor(serverPlayer, getCarried());
-        if (!before.equals(serverPlayer.saveWithoutId(new CompoundTag())) && !WalletPersistence.commit(serverPlayer)) {
-            for (int i = 0; i < beforeOffer.size(); i++) ownItems.setItem(i, beforeOffer.get(i));
-            serverPlayer.load(before);
-            setCarried(beforeCursor);
-            broadcastFullState();
+        boolean saved = false;
+        try (var operation = WalletPersistence.begin(serverPlayer)) {
+            operation.onRollback(() -> {
+                for (int i = 0; i < beforeOffer.size(); i++) ownItems.setItem(i, beforeOffer.get(i).copy());
+            });
+            super.clicked(slot, button, type, player);
+            TradeEscrow.saveCursor(serverPlayer, getCarried());
+            saved = operation.commit();
+        } catch (RuntimeException failure) {
+            LogUtils.getLogger().error("Trade inventory operation failed", failure);
+        }
+        if (!saved) {
             serverPlayer.sendSystemMessage(net.minecraft.network.chat.Component.translatable("message.regnum-economy.wallet.save_failed"));
         }
     }
@@ -188,10 +198,12 @@ public final class TradeMenu extends AbstractContainerMenu {
 
     @Override
     public void removed(Player player) {
-        super.removed(player);
         if (session != null && player instanceof ServerPlayer serverPlayer) {
-            TradeEscrow.saveCursor(serverPlayer, ItemStack.EMPTY);
             session.cancel(serverPlayer);
+            // Cancellation either committed this cursor's return or kept its durable receipt.
+            // Vanilla must not independently insert/drop another copy after a failed save.
+            setCarried(ItemStack.EMPTY);
         }
+        super.removed(player);
     }
 }

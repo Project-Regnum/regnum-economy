@@ -6,6 +6,7 @@ import dev.regnum.economy.integration.NationsAccess;
 import dev.regnum.economy.inventory.InventoryPlan;
 import dev.regnum.economy.money.CoinBalances;
 import dev.regnum.economy.money.Denomination;
+import dev.regnum.economy.money.WalletPersistence;
 import dev.sakhno.regnum.nations.api.v1.EconomyPermission;
 import dev.sakhno.regnum.nations.api.v1.EntityRef;
 import net.fabricmc.fabric.api.event.Event;
@@ -48,6 +49,10 @@ public final class Markets {
             .strength(2.5f, 1200f).pushReaction(PushReaction.BLOCK));
 
     private Markets() {
+    }
+
+    public static boolean blocksSave(Object data) {
+        return data instanceof MarketData && WalletPersistence.blocksMarketSave();
     }
 
     public static void register() {
@@ -96,7 +101,8 @@ public final class Markets {
     }
 
     private static boolean canUse(ServerPlayer player) {
-        return player.isAlive() && !player.isSpectator() && AuthAccess.permits(player)
+        return player.isAlive() && !player.isSpectator() && !player.hasDisconnected() && AuthAccess.permits(player)
+                && player.getServer().getPlayerList().getPlayer(player.getUUID()) == player
                 && player.containerMenu == player.inventoryMenu && player.containerMenu.getCarried().isEmpty();
     }
 
@@ -155,7 +161,8 @@ public final class Markets {
     }
 
     private static boolean manages(ServerPlayer player, Market market, EconomyPermission permission) {
-        return market.standalone ? player.hasPermissions(3) || market.founder.equals(player.getUUID())
+        // Old standalone sites have no political entity; only explicit admin recovery remains.
+        return market.standalone ? player.hasPermissions(3)
                 : NationsAccess.permits(player, market.city, permission);
     }
 

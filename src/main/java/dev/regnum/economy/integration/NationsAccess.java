@@ -6,6 +6,8 @@ import dev.sakhno.regnum.nations.api.v1.EntityRef;
 import dev.sakhno.regnum.nations.api.v1.NationsApi;
 import dev.sakhno.regnum.nations.api.v1.NationsIntegration;
 import dev.sakhno.regnum.nations.api.v1.NationsIntegrations;
+import dev.sakhno.regnum.nations.api.v1.NationsEvents;
+import dev.regnum.economy.market.TreasuryPackets;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
@@ -21,7 +23,8 @@ public final class NationsAccess implements NationsIntegration {
     @Override
     public void initialize() {
         // Nations invokes this before a server exists; acquire NationsApi only inside server actions.
-        NationsIntegrations.registerEconomy(RegnumEconomy.id("economy"));
+        NationsIntegrations.registerEconomy(RegnumEconomy.NATIONS_PROVIDER);
+        NationsEvents.CHANGED.register((server, change) -> TreasuryPackets.invalidate(server));
     }
 
     public static boolean installed() {

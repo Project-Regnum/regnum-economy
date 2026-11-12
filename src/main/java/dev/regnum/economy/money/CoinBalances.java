@@ -52,13 +52,18 @@ public final class CoinBalances {
         SUCCESS,
         SAME_PLAYER,
         INSUFFICIENT_FUNDS,
-        RECIPIENT_LIMIT
+        RECIPIENT_LIMIT,
+        SAVE_FAILED
     }
 
     private CoinBalances() {
     }
 
     public static void register() {
+        WalletPersistence.registerPlayerState(player -> {
+            Long before = player.getAttached(BALANCE);
+            return () -> player.setAttached(BALANCE, before);
+        });
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> syncAfterLogin(handler.player));
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) ->
                 SYNCED.remove(handler.player.getUUID(), handler.player));
@@ -85,7 +90,7 @@ public final class CoinBalances {
     }
 
     static void set(ServerPlayer player, long amount) {
-        if (!player.getServer().isSameThread() || amount < 0) {
+        if (!player.getServer().isSameThread() || !WalletPersistence.changing(player) || amount < 0) {
             throw new IllegalStateException("Invalid wallet mutation");
         }
         player.setAttached(BALANCE, amount);
@@ -96,27 +101,28 @@ public final class CoinBalances {
     }
 
     public static void sync(ServerPlayer player) {
-        BalancePayload.sendTo(player);
+        if (AuthAccess.permits(player)) BalancePayload.sendTo(player);
+        else BalancePayload.hideFrom(player);
         player.containerMenu.broadcastChanges();
     }
 
     public static boolean credit(ServerPlayer player, long amount) {
         long balance = get(player);
-        if (!WalletPersistence.available(player.getServer()) || amount < 1 || amount > Long.MAX_VALUE - balance) {
+        if (!WalletPersistence.changing(player) || !WalletPersistence.available(player.getServer())
+                || amount < 1 || amount > Long.MAX_VALUE - balance) {
             return false;
         }
         set(player, balance + amount);
-        BalancePayload.sendTo(player);
         return true;
     }
 
     public static boolean debit(ServerPlayer player, long amount) {
         long balance = get(player);
-        if (!WalletPersistence.available(player.getServer()) || amount < 1 || amount > balance) {
+        if (!WalletPersistence.changing(player) || !WalletPersistence.available(player.getServer())
+                || amount < 1 || amount > balance) {
             return false;
         }
         set(player, balance - amount);
-        BalancePayload.sendTo(player);
         return true;
     }
 
@@ -136,16 +142,14 @@ public final class CoinBalances {
             return TransferResult.RECIPIENT_LIMIT;
         }
 
-        set(from, available - amount);
-        set(to, recipientBalance + amount);
-        if (!WalletPersistence.commitPlayers(from, to)) {
-            set(from, available);
-            set(to, recipientBalance);
-            return TransferResult.INSUFFICIENT_FUNDS;
+        if (!from.containerMenu.getCarried().isEmpty() || !to.containerMenu.getCarried().isEmpty()) {
+            return TransferResult.SAVE_FAILED;
         }
-        BalancePayload.sendTo(from);
-        BalancePayload.sendTo(to);
-        return TransferResult.SUCCESS;
+        try (var operation = WalletPersistence.begin(from, to)) {
+            set(from, available - amount);
+            set(to, recipientBalance + amount);
+            return operation.commit() ? TransferResult.SUCCESS : TransferResult.SAVE_FAILED;
+        }
     }
 
     public static boolean exchange(ServerPlayer first, long firstOffer, ServerPlayer second, long secondOffer) {
@@ -153,6 +157,7 @@ public final class CoinBalances {
         long secondBalance = get(second);
         if (first.getUUID().equals(second.getUUID()) || first.getServer() != second.getServer()
                 || !WalletPersistence.available(first.getServer())
+                || !WalletPersistence.changing(first) || !WalletPersistence.changing(second)
                 || firstOffer < 0 || secondOffer < 0
                 || firstOffer > firstBalance || secondOffer > secondBalance) {
             return false;
@@ -166,8 +171,6 @@ public final class CoinBalances {
         if (firstOffer != secondOffer) {
             set(first, firstRemaining + secondOffer);
             set(second, secondRemaining + firstOffer);
-            BalancePayload.sendTo(first);
-            BalancePayload.sendTo(second);
         }
         return true;
     }

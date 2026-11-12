@@ -18,7 +18,8 @@ public class RegnumEconomyClient implements ClientModInitializer {
         MenuScreens.register(WalletMenu.type(), WalletScreen::new);
         ClientPlayNetworking.registerGlobalReceiver(WalletPackets.State.TYPE, (payload, context) -> {
             if (context.player().containerMenu instanceof WalletMenu menu) {
-                menu.setState(payload);
+                if (context.client().screen instanceof WalletScreen screen && screen.getMenu() == menu) screen.accept(payload);
+                else menu.setState(payload);
             }
         });
         ClientPlayNetworking.registerGlobalReceiver(TradePackets.State.TYPE, (payload, context) -> {

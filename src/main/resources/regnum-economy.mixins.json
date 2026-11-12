@@ -3,6 +3,8 @@
 	"package": "dev.regnum.economy.mixin",
 	"compatibilityLevel": "JAVA_21",
 	"mixins": [
+		"PlayerDataStorageMixin",
+		"SavedDataMixin",
 		"PlayerListMixin",
 		"ServerPlayerMixin"
 	],

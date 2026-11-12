@@ -2,7 +2,6 @@ package dev.regnum.economy.market;
 
 import com.mojang.logging.LogUtils;
 import dev.sakhno.regnum.nations.api.v1.EntityRef;
-import dev.regnum.economy.money.CoinBalances;
 import dev.regnum.economy.money.WalletPersistence;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
@@ -185,39 +184,40 @@ final class MarketData extends SavedData {
     }
 
     int transaction(ServerPlayer player, IntSupplier action) {
-        if (!WalletPersistence.available(player.getServer())) return 0;
+        if (!available() || !WalletPersistence.available(player.getServer())) {
+            player.sendSystemMessage(Component.translatable("message.regnum-economy.market.unavailable"));
+            return 0;
+        }
         CompoundTag beforeMarket = save(new CompoundTag(), player.registryAccess());
-        CompoundTag beforePlayer = player.saveWithoutId(new CompoundTag());
         List<Component> feedback = new ArrayList<>();
-        transactionMessages = feedback;
-        int result;
-        try {
+        int result = 0;
+        boolean committed = false;
+        try (var operation = WalletPersistence.begin(player)) {
+            operation.onRollback(() -> {
+                MarketData restored = load(beforeMarket, player.registryAccess());
+                restored.setDirty();
+                player.getServer().overworld().getDataStorage().set(FILE_ID, restored);
+            });
+            transactionMessages = feedback;
             result = action.getAsInt();
+            if (result != 0) committed = operation.commit(save(new CompoundTag(), player.registryAccess()));
         } catch (RuntimeException failure) {
             LOGGER.error("Regnum market operation failed; restoring its original state", failure);
-            rollback(player, beforePlayer, beforeMarket);
+            player.sendSystemMessage(Component.translatable("message.regnum-economy.wallet.save_failed"));
             return 0;
         } finally {
             transactionMessages = null;
         }
         if (result == 0) return 0;
-        if (WalletPersistence.commitMarket(player, save(new CompoundTag(), player.registryAccess()))) {
-            feedback.forEach(player::sendSystemMessage);
-            return result;
+        if (!committed) {
+            player.sendSystemMessage(Component.translatable("message.regnum-economy.wallet.save_failed"));
+            return 0;
         }
-        rollback(player, beforePlayer, beforeMarket);
-        return 0;
-    }
-
-    private static void rollback(ServerPlayer player, CompoundTag beforePlayer, CompoundTag beforeMarket) {
-        // A failed pre-commit write leaves no durable monetary mutation.
-        player.load(beforePlayer);
-        MarketData restored = load(beforeMarket, player.registryAccess());
-        restored.setDirty();
-        player.getServer().overworld().getDataStorage().set(FILE_ID, restored);
-        CoinBalances.sync(player);
-        player.containerMenu.broadcastFullState();
-        player.sendSystemMessage(Component.translatable("message.regnum-economy.wallet.save_failed"));
+        for (Component message : feedback) {
+            try { player.sendSystemMessage(message); }
+            catch (RuntimeException failure) { LOGGER.warn("Committed market operation could not deliver feedback", failure); }
+        }
+        return result;
     }
 
     void success(ServerPlayer player, Component message) {

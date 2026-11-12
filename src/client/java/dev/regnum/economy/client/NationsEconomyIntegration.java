@@ -15,7 +15,7 @@ import java.util.Set;
 public final class NationsEconomyIntegration implements NationsEconomyClient {
     @Override
     public void initialize() {
-        var provider = RegnumEconomy.id("economy");
+        var provider = RegnumEconomy.NATIONS_PROVIDER;
         for (EntityRef.Scope scope : EntityRef.Scope.values()) {
             String name = scope == EntityRef.Scope.CITY ? "city" : "kingdom";
             EconomyUi.register(provider, new EconomyPanel(RegnumEconomy.id(name + "_treasury"),

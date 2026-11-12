@@ -1,10 +1,12 @@
 package dev.regnum.economy.trade;
 
 import dev.regnum.economy.integration.AuthAccess;
+import dev.regnum.economy.money.WalletPersistence;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.arguments.EntityArgument;
@@ -128,6 +130,9 @@ public final class Trades {
     }
 
     private static String blockedReason(ServerPlayer first, ServerPlayer second) {
+        if (!WalletPersistence.available(first.getServer())) return "unavailable";
+        if (!ServerPlayNetworking.canSend(first, TradePackets.State.TYPE)
+                || !ServerPlayNetworking.canSend(second, TradePackets.State.TYPE)) return "client_version";
         if (first == second) {
             return "self";
         }
@@ -138,7 +143,8 @@ public final class Trades {
             return "distance";
         }
         if (ACTIVE.containsKey(first) || ACTIVE.containsKey(second)
-                || first.containerMenu != first.inventoryMenu || second.containerMenu != second.inventoryMenu) {
+                || first.containerMenu != first.inventoryMenu || second.containerMenu != second.inventoryMenu
+                || !first.containerMenu.getCarried().isEmpty() || !second.containerMenu.getCarried().isEmpty()) {
             return "busy";
         }
         return null;
@@ -175,6 +181,7 @@ public final class Trades {
 
     static boolean inRange(ServerPlayer first, ServerPlayer second) {
         return first.isAlive() && second.isAlive() && !first.isSpectator() && !second.isSpectator()
+                && !first.hasDisconnected() && !second.hasDisconnected()
                 && first.level() == second.level() && first.distanceToSqr(second) <= MAX_DISTANCE_SQUARED;
     }
 

@@ -24,10 +24,20 @@ final class TradeEscrow {
     }
 
     static void register() {
-        // Register the persistent attachment during mod initialization.
+        WalletPersistence.registerPlayerState(player -> {
+            List<ItemStack> existing = player.getAttached(ITEMS);
+            List<ItemStack> before = existing == null ? null : existing.stream().map(ItemStack::copy).toList();
+            ItemStack existingCursor = player.getAttached(CURSOR);
+            ItemStack cursor = existingCursor == null ? null : existingCursor.copy();
+            return () -> {
+                player.setAttached(ITEMS, before);
+                player.setAttached(CURSOR, cursor);
+            };
+        });
     }
 
     static void save(ServerPlayer player, List<ItemStack> stacks) {
+        if (!WalletPersistence.changing(player)) throw new IllegalStateException("Escrow changes require an economy operation");
         List<ItemStack> items = stacks.stream().filter(stack -> !stack.isEmpty()).map(ItemStack::copy).toList();
         if (items.isEmpty()) {
             player.removeAttached(ITEMS);
@@ -37,6 +47,7 @@ final class TradeEscrow {
     }
 
     static void saveCursor(ServerPlayer player, ItemStack stack) {
+        if (!WalletPersistence.changing(player)) throw new IllegalStateException("Cursor changes require an economy operation");
         if (stack.isEmpty()) player.removeAttached(CURSOR);
         else player.setAttached(CURSOR, stack.copy());
     }
@@ -49,11 +60,11 @@ final class TradeEscrow {
         if (pending.isEmpty()) {
             return true;
         }
-        if (!AuthAccess.permits(player)) {
+        if (!AuthAccess.permits(player) || !WalletPersistence.available(player.getServer())
+                || player.containerMenu != player.inventoryMenu || !player.containerMenu.getCarried().isEmpty()) {
             return false;
         }
         InventoryPlan inventory = new InventoryPlan(player.getInventory());
-        InventoryPlan rollback = new InventoryPlan(player.getInventory());
         List<ItemStack> remaining = new ArrayList<>();
         for (ItemStack stack : pending) {
             ItemStack leftover = inventory.add(stack);
@@ -64,15 +75,32 @@ final class TradeEscrow {
         if (ItemStack.listMatches(pending, remaining)) {
             return false;
         }
-        inventory.apply();
+        try (var operation = WalletPersistence.begin(player)) {
+            inventory.apply();
+            save(player, remaining);
+            saveCursor(player, ItemStack.EMPTY);
+            return operation.commit() && remaining.isEmpty();
+        }
+    }
+
+    /** Stage one participant's cancellation return, without committing it independently. */
+    static boolean stageReturn(ServerPlayer player, List<ItemStack> offered, ItemStack cursor) {
+        List<ItemStack> pending = new ArrayList<>();
+        for (ItemStack stack : offered) if (!stack.isEmpty()) pending.add(stack.copy());
+        if (!cursor.isEmpty()) pending.add(cursor.copy());
+        List<ItemStack> remaining = new ArrayList<>();
+        if (AuthAccess.permits(player) && player.isAlive()) {
+            InventoryPlan inventory = new InventoryPlan(player.getInventory());
+            for (ItemStack stack : pending) {
+                ItemStack leftover = inventory.add(stack);
+                if (!leftover.isEmpty()) remaining.add(leftover);
+            }
+            inventory.apply();
+        } else {
+            remaining.addAll(pending);
+        }
         save(player, remaining);
         saveCursor(player, ItemStack.EMPTY);
-        if (!WalletPersistence.commit(player)) {
-            rollback.apply();
-            save(player, offered);
-            saveCursor(player, cursor);
-            return false;
-        }
         return remaining.isEmpty();
     }
 }

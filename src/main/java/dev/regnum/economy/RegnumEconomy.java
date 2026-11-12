@@ -12,6 +12,7 @@ import net.minecraft.resources.ResourceLocation;
 
 public class RegnumEconomy implements ModInitializer {
     public static final String MOD_ID = "regnum-economy";
+    public static final ResourceLocation NATIONS_PROVIDER = id("economy");
 
     @Override
     public void onInitialize() {

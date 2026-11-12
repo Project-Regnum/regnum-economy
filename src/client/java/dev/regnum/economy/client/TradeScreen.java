@@ -19,6 +19,9 @@ final class TradeScreen extends AbstractContainerScreen<TradeMenu> {
     private EditBox amount;
     private Button confirm;
     private boolean settingAmount;
+    private long submittedRevision = -1;
+    private long submittedAt;
+    private int submittedAction = -1;
 
     TradeScreen(TradeMenu menu, Inventory inventory, Component title) {
         super(menu, inventory, title);
@@ -69,8 +72,12 @@ final class TradeScreen extends AbstractContainerScreen<TradeMenu> {
 
     private void send(int action, long coins) {
         TradePackets.State state = menu.state();
-        if (state != null && ClientPlayNetworking.canSend(TradePackets.Action.TYPE)) {
-            ClientPlayNetworking.send(new TradePackets.Action(menu.containerId, state.revision(), action, coins));
+        if (state != null && (action == TradePackets.Action.CANCEL || state.revision() != submittedRevision)
+                && ClientPlayNetworking.canSend(TradePackets.Action.TYPE)) {
+            submittedRevision = state.revision();
+            submittedAction = action;
+            submittedAt = System.currentTimeMillis();
+            ClientPlayNetworking.send(new TradePackets.Action(menu.containerId, state.session(), state.revision(), action, coins));
         }
     }
 
@@ -86,16 +93,27 @@ final class TradeScreen extends AbstractContainerScreen<TradeMenu> {
             return;
         }
         boolean locked = state.seconds() > 0;
+        boolean pending = state.revision() == submittedRevision;
+        // Coalesce edits typed while the preceding amount is awaiting acknowledgement.
+        if (!locked && !pending && parseAmount(amount.getValue()) >= 0
+                && parseAmount(amount.getValue()) != state.ownCoins()) {
+            send(TradePackets.Action.OFFER_COINS, parseAmount(amount.getValue()));
+            pending = true;
+        }
         if (locked && parseAmount(amount.getValue()) != state.ownCoins()) {
             settingAmount = true;
             amount.setValue(Long.toString(state.ownCoins()));
             settingAmount = false;
         }
-        amount.setEditable(!locked);
+        amount.setEditable(!locked && !state.ownConfirmed() && !(pending && submittedAction == TradePackets.Action.CONFIRM));
         confirm.setMessage(Component.translatable(TEXT + (state.ownConfirmed() ? "pause" : "confirm")));
-        confirm.active = state.ownConfirmed() || (hasOffer(state)
+        confirm.active = !pending && (state.ownConfirmed() || (hasOffer(state)
                 && parseAmount(amount.getValue()) == state.ownCoins()
-                && state.ownCoins() <= state.available());
+                && state.ownCoins() <= state.available()));
+        if (pending && System.currentTimeMillis() - submittedAt > 10_000) {
+            // Do not resend a financial confirmation. Closing safely returns escrow.
+            confirm.active = false;
+        }
     }
 
     @Override
@@ -148,7 +166,9 @@ final class TradeScreen extends AbstractContainerScreen<TradeMenu> {
         }
         drawFitted(graphics, Component.translatable(TEXT + "coin_count", Long.toString(state.otherCoins())), 132, 93, 104);
         Component status;
-        if (state.seconds() > 0) {
+        if (state.revision() == submittedRevision && System.currentTimeMillis() - submittedAt > 10_000) {
+            status = Component.translatable(TEXT + "timeout");
+        } else if (state.seconds() > 0) {
             status = Component.translatable(TEXT + "countdown", state.seconds());
         } else if (parseAmount(amount.getValue()) > state.available()) {
             status = Component.translatable(TEXT + "insufficient");
@@ -156,6 +176,8 @@ final class TradeScreen extends AbstractContainerScreen<TradeMenu> {
             status = Component.translatable("message.regnum-economy.trade.space");
         } else if (state.issue() == TradePackets.State.COIN_BALANCE) {
             status = Component.translatable("message.regnum-economy.trade.balance");
+        } else if (state.issue() == TradePackets.State.SAVE_FAILED) {
+            status = Component.translatable("message.regnum-economy.trade.save_failed");
         } else if (state.ownConfirmed()) {
             status = Component.translatable(TEXT + "waiting");
         } else if (state.otherConfirmed()) {

@@ -11,6 +11,38 @@ repositories {
 	// for more information about repositories.
 }
 
+def nationsDependencyFile = file(providers.gradleProperty('nations_jar')
+		.orElse("libs/regnum-nations-${project.nations_api_commit}.jar").get())
+def nationsCommit = project.nations_api_commit.toString()
+def nationsDigest = project.nations_content_sha256.toString()
+
+// Fingerprint ZIP contents, not timestamps/compression. Repackaging identical bytes is allowed.
+def verifyNationsDependency = tasks.register('verifyNationsDependency') {
+	group = 'build setup'
+	description = 'Rejects a Nations artifact that does not match the pinned API build.'
+	doLast {
+		if (!nationsDependencyFile.isFile()) {
+			throw new GradleException("Build Nations PR #20 at ${nationsCommit} and supply -Pnations_jar=<jar>.")
+		}
+		def digest = java.security.MessageDigest.getInstance('SHA-256')
+		new java.util.zip.ZipFile(nationsDependencyFile).withCloseable { archive ->
+			def entries = java.util.Collections.list(archive.entries()).findAll { !it.directory }.sort { it.name }
+			if (entries.collect { it.name }.toSet().size() != entries.size()) throw new GradleException('Duplicate Nations JAR entries')
+			entries.each { entry ->
+				byte[] name = entry.name.getBytes(java.nio.charset.StandardCharsets.UTF_8)
+				byte[] content = archive.getInputStream(entry).withCloseable { it.readAllBytes() }
+				digest.update(java.nio.ByteBuffer.allocate(4).putInt(name.length).array())
+				digest.update(name)
+				digest.update(java.nio.ByteBuffer.allocate(8).putLong(content.length).array())
+				digest.update(content)
+			}
+		}
+		if (java.util.HexFormat.of().formatHex(digest.digest()) != nationsDigest) {
+			throw new GradleException("Incompatible Nations JAR. This build requires the verified PR #20 artifact at ${nationsCommit}; see README.md.")
+		}
+	}
+}
+
 loom {
 	splitEnvironmentSourceSets()
 
@@ -32,21 +64,31 @@ dependencies {
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
 
 	// Nations has no published API artifact. Use the mod built from the pinned API commit.
-	modImplementation files(providers.gradleProperty('nations_jar')
-			.orElse("libs/regnum-nations-${project.nations_api_commit}.jar"))
+	modImplementation files(nationsDependencyFile)
 }
 
 processResources {
+	dependsOn verifyNationsDependency
 	def version = project.version
 	inputs.property "version", version
+	inputs.property 'nations_api_commit', nationsCommit
+	inputs.property 'nations_content_sha256', nationsDigest
 
 	filesMatching("fabric.mod.json") {
 		expand "version": version
 	}
+	filesMatching('regnum-economy-nations.properties') {
+		expand nations_api_commit: nationsCommit, nations_content_sha256: nationsDigest
+	}
 }
 
 tasks.withType(JavaCompile).configureEach {
+	dependsOn verifyNationsDependency
 	it.options.release = 21
+}
+
+loom.runs.configureEach {
+	vmArg "-DregnumEconomy.nationsSourceJar=${nationsDependencyFile.absolutePath}"
 }
 
 java {

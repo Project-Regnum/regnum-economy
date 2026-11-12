@@ -10,13 +10,14 @@ import java.util.Map;
 
 public final class CoinConversion {
     public enum Result {
-        DEPOSITED, WITHDRAWN, INVALID, CAPACITY, FUNDS, SPACE, SAVE_FAILED
+        DEPOSITED, WITHDRAWN, INVALID, CAPACITY, FUNDS, SPACE, SAVE_FAILED, STALE, SESSION_MISMATCH, UNAVAILABLE
     }
 
     private CoinConversion() {
     }
 
     static Result deposit(ServerPlayer player, int selected, boolean all) {
+        if (!WalletPersistence.available(player.getServer())) return Result.UNAVAILABLE;
         if (!allowed(player)) {
             return Result.INVALID;
         }
@@ -47,19 +48,16 @@ public final class CoinConversion {
         if (value > Long.MAX_VALUE - before) {
             return Result.CAPACITY;
         }
-        consumed.keySet().forEach(slot -> inventory.setItem(slot, ItemStack.EMPTY));
-        CoinBalances.set(player, before + value);
-        if (!WalletPersistence.commit(player)) {
-            consumed.forEach(inventory::setItem);
-            CoinBalances.set(player, before);
-            sync(player);
-            return Result.SAVE_FAILED;
+        try (var operation = WalletPersistence.begin(player)) {
+            consumed.keySet().forEach(slot -> inventory.setItem(slot, ItemStack.EMPTY));
+            inventory.setChanged();
+            CoinBalances.set(player, before + value);
+            return operation.commit() ? Result.DEPOSITED : Result.SAVE_FAILED;
         }
-        sync(player);
-        return Result.DEPOSITED;
     }
 
     static Result withdraw(ServerPlayer player, long amount) {
+        if (!WalletPersistence.available(player.getServer())) return Result.UNAVAILABLE;
         if (!allowed(player) || amount < 1) {
             return Result.INVALID;
         }
@@ -68,7 +66,6 @@ public final class CoinConversion {
             return Result.FUNDS;
         }
         var inventory = player.getInventory();
-        InventoryPlan rollback = new InventoryPlan(inventory);
         InventoryPlan delivery = new InventoryPlan(inventory);
         long remaining = amount;
         Denomination[] denominations = {Denomination.GOLD, Denomination.SILVER, Denomination.COPPER};
@@ -87,16 +84,11 @@ public final class CoinConversion {
                 count -= size;
             }
         }
-        CoinBalances.set(player, before - amount);
-        delivery.apply();
-        if (!WalletPersistence.commit(player)) {
-            rollback.apply();
-            CoinBalances.set(player, before);
-            sync(player);
-            return Result.SAVE_FAILED;
+        try (var operation = WalletPersistence.begin(player)) {
+            CoinBalances.set(player, before - amount);
+            delivery.apply();
+            return operation.commit() ? Result.WITHDRAWN : Result.SAVE_FAILED;
         }
-        sync(player);
-        return Result.WITHDRAWN;
     }
 
     private static boolean allowed(ServerPlayer player) {
@@ -106,9 +98,4 @@ public final class CoinConversion {
                 && player.containerMenu.getCarried().isEmpty();
     }
 
-    private static void sync(ServerPlayer player) {
-        player.getInventory().setChanged();
-        BalancePayload.sendTo(player);
-        player.containerMenu.broadcastChanges();
-    }
 }

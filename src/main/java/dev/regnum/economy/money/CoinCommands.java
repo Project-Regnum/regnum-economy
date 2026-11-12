@@ -16,10 +16,8 @@ public final class CoinCommands {
 
     public static void register() {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
-            dispatcher.register(literal("wallet").executes(context -> {
-                WalletMenu.open(context.getSource().getPlayerOrException());
-                return 1;
-            }));
+            dispatcher.register(literal("wallet").executes(context ->
+                    WalletMenu.open(context.getSource().getPlayerOrException()) ? 1 : 0));
 
             dispatcher.register(literal("economy").requires(source -> source.hasPermission(2))
                     .then(literal("grant")

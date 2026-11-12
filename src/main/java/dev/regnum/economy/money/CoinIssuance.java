@@ -5,6 +5,7 @@ import com.mojang.serialization.Codec;
 import com.mojang.serialization.DataResult;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import dev.regnum.economy.RegnumEconomy;
+import dev.regnum.economy.integration.AuthAccess;
 import net.fabricmc.fabric.api.attachment.v1.AttachmentRegistry;
 import net.fabricmc.fabric.api.attachment.v1.AttachmentType;
 import net.fabricmc.fabric.api.gamerule.v1.GameRuleFactory;
@@ -41,13 +42,20 @@ public final class CoinIssuance {
     }
 
     static void register() {
-        // Eagerly register persistent receipts and issuance policy.
+        WalletPersistence.registerPlayerState(player -> {
+            List<Receipt> before = player.getAttached(RECEIPTS);
+            return () -> player.setAttached(RECEIPTS, before);
+        });
     }
 
     public static String issue(CommandSourceStack source, ServerPlayer player, long amount) {
         if (!source.hasPermission(2) || !player.getServer().isSameThread()
                 || !WalletPersistence.available(player.getServer()) || !player.isAlive()
                 || player.hasDisconnected() || player.containerMenu != player.inventoryMenu
+                || player.isSpectator() || !AuthAccess.permits(player)
+                || player.getServer().getPlayerList().getPlayer(player.getUUID()) != player
+                || source.getServer() != player.getServer()
+                || source.getEntity() instanceof ServerPlayer actor && (!AuthAccess.permits(actor) || actor.hasDisconnected())
                 || !player.containerMenu.getCarried().isEmpty()) {
             return "invalid";
         }
@@ -79,14 +87,11 @@ public final class CoinIssuance {
         List<Receipt> receipts = new ArrayList<>(previous);
         String actor = source.getEntity() == null ? source.getTextName() : source.getEntity().getStringUUID();
         receipts.add(new Receipt(actor, System.currentTimeMillis(), amount));
-        player.setAttached(RECEIPTS, List.copyOf(receipts));
-        CoinBalances.set(player, balance + amount);
-        if (!WalletPersistence.commit(player)) {
-            player.setAttached(RECEIPTS, previous);
-            CoinBalances.set(player, balance);
-            return "save_failed";
+        try (var operation = WalletPersistence.begin(player)) {
+            player.setAttached(RECEIPTS, List.copyOf(receipts));
+            CoinBalances.set(player, balance + amount);
+            if (!operation.commit()) return "save_failed";
         }
-        BalancePayload.sendTo(player);
         LogUtils.getLogger().info("Currency issuance: actor={}, recipient={}, amount={}", actor, player.getUUID(), amount);
         return null;
     }

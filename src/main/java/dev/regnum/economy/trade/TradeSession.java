@@ -3,7 +3,7 @@ package dev.regnum.economy.trade;
 import dev.regnum.economy.inventory.InventoryPlan;
 import dev.regnum.economy.money.CoinBalances;
 import dev.regnum.economy.money.WalletPersistence;
-import net.minecraft.nbt.CompoundTag;
+import com.mojang.logging.LogUtils;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
@@ -14,6 +14,7 @@ import net.minecraft.world.item.ItemStack;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.UUID;
 
 final class TradeSession {
     private static final int COUNTDOWN_TICKS = 60;
@@ -21,7 +22,8 @@ final class TradeSession {
 
     final Side first;
     final Side second;
-    private int revision;
+    private final UUID session = UUID.randomUUID();
+    private long revision;
     private int ticks;
     private int issue;
     private boolean closed;
@@ -54,6 +56,13 @@ final class TradeSession {
         if (!canInteract()) {
             return;
         }
+        if (!session.equals(action.session()) || action.action() != TradePackets.Action.CANCEL && action.revision() != revision) {
+            side.lastState = null;
+            sync();
+            return;
+        }
+        if (revision == Long.MAX_VALUE) { cancel(null); return; }
+        revision++;
         if (action.action() == TradePackets.Action.CANCEL) {
             cancel(null);
         } else if (action.action() == TradePackets.Action.OFFER_COINS && !locked()
@@ -61,7 +70,7 @@ final class TradeSession {
             side.coins = action.coins();
             resetConfirmations();
             sync();
-        } else if (action.action() == TradePackets.Action.CONFIRM && action.revision() == revision) {
+        } else if (action.action() == TradePackets.Action.CONFIRM) {
             if (side.confirmed) {
                 resetConfirmations();
             } else if (ready()) {
@@ -73,6 +82,7 @@ final class TradeSession {
             }
             sync();
         }
+        sync();
     }
 
     void tick() {
@@ -104,7 +114,7 @@ final class TradeSession {
     }
 
     private void resetConfirmations() {
-        revision++;
+        if (revision < Long.MAX_VALUE) revision++;
         issue = 0;
         first.confirmed = false;
         second.confirmed = false;
@@ -116,36 +126,33 @@ final class TradeSession {
             pause(TradePackets.State.INVENTORY_SPACE);
             return;
         }
-        CompoundTag beforeFirst = first.player.saveWithoutId(new CompoundTag());
-        CompoundTag beforeSecond = second.player.saveWithoutId(new CompoundTag());
         InventoryPlan firstInventory = new InventoryPlan(first.player.getInventory());
         InventoryPlan secondInventory = new InventoryPlan(second.player.getInventory());
         if (!fits(firstInventory, second.items) || !fits(secondInventory, first.items)) {
             pause(TradePackets.State.INVENTORY_SPACE);
             return;
         }
-        if (!CoinBalances.exchange(first.player, first.coins, second.player, second.coins)) {
-            pause(TradePackets.State.COIN_BALANCE);
+        boolean saved = false;
+        try (var operation = WalletPersistence.begin(first.player, second.player)) {
+            if (!CoinBalances.exchange(first.player, first.coins, second.player, second.coins)) {
+                pause(TradePackets.State.COIN_BALANCE);
+                return;
+            }
+            firstInventory.apply();
+            secondInventory.apply();
+            TradeEscrow.save(first.player, List.of());
+            TradeEscrow.save(second.player, List.of());
+            saved = operation.commit();
+        } catch (RuntimeException failure) {
+            LogUtils.getLogger().error("Trade completion failed", failure);
+        }
+        if (!saved) {
+            pause(TradePackets.State.SAVE_FAILED);
+            notifyPlayers("save_failed");
             return;
         }
-
-        firstInventory.apply();
-        secondInventory.apply();
-        TradeEscrow.save(first.player, List.of());
-        TradeEscrow.save(second.player, List.of());
-        if (!WalletPersistence.commitPlayers(first.player, second.player)) {
-            first.player.load(beforeFirst);
-            second.player.load(beforeSecond);
-            CoinBalances.sync(first.player);
-            CoinBalances.sync(second.player);
-            first.player.containerMenu.broadcastFullState();
-            second.player.containerMenu.broadcastFullState();
-            pause(TradePackets.State.COIN_BALANCE);
-            first.player.sendSystemMessage(Component.translatable("message.regnum-economy.wallet.save_failed"));
-            second.player.sendSystemMessage(Component.translatable("message.regnum-economy.wallet.save_failed"));
-            return;
-        }
-        finish(null, true);
+        finish(null);
+        notifyPlayers("completed");
     }
 
     private static boolean fits(InventoryPlan inventory, SimpleContainer items) {
@@ -164,34 +171,47 @@ final class TradeSession {
     }
 
     void cancel(ServerPlayer closingPlayer) {
-        finish(closingPlayer, false);
+        if (closed) return;
+        boolean saved = false;
+        boolean firstReturned = false, secondReturned = false;
+        try (var operation = WalletPersistence.begin(first.player, second.player)) {
+            firstReturned = TradeEscrow.stageReturn(first.player, first.items.getItems(), cursor(first));
+            secondReturned = TradeEscrow.stageReturn(second.player, second.items.getItems(), cursor(second));
+            if (viewing(first)) first.player.containerMenu.setCarried(ItemStack.EMPTY);
+            if (viewing(second)) second.player.containerMenu.setCarried(ItemStack.EMPTY);
+            saved = operation.commit();
+        } catch (RuntimeException failure) {
+            LogUtils.getLogger().error("Trade cancellation could not commit; returns remain in escrow", failure);
+        }
+        // On failure, rollback restored each durable escrow/cursor receipt. Clear only the
+        // live menu cursor before closing; pending-claim restoration can retry later.
+        finish(closingPlayer);
+        if (saved) notifyPlayers("cancelled");
+        if (!saved || !firstReturned) first.player.sendSystemMessage(Component.translatable(MESSAGE + "refund_pending"));
+        if (!saved || !secondReturned) second.player.sendSystemMessage(Component.translatable(MESSAGE + "refund_pending"));
     }
 
-    private void finish(ServerPlayer closingPlayer, boolean success) {
+    private ItemStack cursor(Side side) {
+        return viewing(side) ? side.player.containerMenu.getCarried().copy() : ItemStack.EMPTY;
+    }
+
+    private void finish(ServerPlayer closingPlayer) {
         if (closed) {
             return;
         }
         closed = true;
         Trades.forget(this);
+        if (viewing(first)) first.player.containerMenu.setCarried(ItemStack.EMPTY);
+        if (viewing(second)) second.player.containerMenu.setCarried(ItemStack.EMPTY);
+        first.items.clearContent();
+        second.items.clearContent();
         close(first, closingPlayer);
         close(second, closingPlayer);
-        if (!success) {
-            refund(first.player);
-            refund(second.player);
-            WalletPersistence.commitPlayers(first.player, second.player);
-        }
-        notifyPlayers(success ? "completed" : "cancelled");
     }
 
     private void close(Side side, ServerPlayer closingPlayer) {
         if (side.player != closingPlayer && viewing(side)) {
             side.player.closeContainer();
-        }
-    }
-
-    private static void refund(ServerPlayer player) {
-        if (!TradeEscrow.restore(player)) {
-            player.sendSystemMessage(Component.translatable(MESSAGE + "refund_pending"));
         }
     }
 
@@ -213,7 +233,7 @@ final class TradeSession {
             return;
         }
         int seconds = (ticks + 19) / 20;
-        var state = new TradePackets.State(side.player.containerMenu.containerId, revision, side.coins,
+        var state = new TradePackets.State(side.player.containerMenu.containerId, session, revision, side.coins,
                 other.coins, CoinBalances.get(side.player), side.confirmed, other.confirmed, seconds, issue);
         if (!state.equals(side.lastState)) {
             side.player.containerMenu.broadcastChanges();

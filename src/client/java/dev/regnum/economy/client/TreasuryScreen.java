@@ -21,8 +21,9 @@ final class TreasuryScreen extends Screen {
     private TreasuryPackets.State state;
     private EditBox amount;
     private KingdomUi.RoyalButton deposit, withdraw, refresh;
-    private boolean pending;
-    private long sentAt;
+    private long nextRequest, latestRequest, pending, sentAt, lastReadAt;
+    private boolean needsRefresh, needsContext;
+    private Component feedback = text("loading");
 
     TreasuryScreen(EconomyContext context, Screen returnTo) {
         super(text("title"));
@@ -46,9 +47,12 @@ final class TreasuryScreen extends Screen {
         int half = (content - KingdomUi.GAP) / 2;
         deposit = addRenderableWidget(new KingdomUi.RoyalButton(x, y + 138, half, text("deposit"), b -> send(TreasuryPackets.DEPOSIT)));
         withdraw = addRenderableWidget(new KingdomUi.RoyalButton(x + half + KingdomUi.GAP, y + 138, half, text("withdraw"), b -> send(TreasuryPackets.WITHDRAW)));
-        refresh = addRenderableWidget(new KingdomUi.RoyalButton(x, bounds.footerY(), half, text("refresh"), b -> send(TreasuryPackets.OPEN)));
+        refresh = addRenderableWidget(new KingdomUi.RoyalButton(x, bounds.footerY(), half, text("refresh"), b -> {
+            if (needsContext) onClose();
+            else send(TreasuryPackets.OPEN);
+        }));
         addRenderableWidget(new KingdomUi.RoyalButton(x + half + KingdomUi.GAP, bounds.footerY(), half, text("back"), b -> onClose()));
-        if (state == null && !pending) send(TreasuryPackets.OPEN);
+        if (state == null && pending == 0) send(TreasuryPackets.OPEN);
     }
 
     private static long parse(String value) {
@@ -57,47 +61,66 @@ final class TreasuryScreen extends Screen {
     }
 
     private void send(int action) {
-        if (pending || !ClientPlayNetworking.canSend(TreasuryPackets.Request.TYPE) || action != TreasuryPackets.OPEN && state == null) return;
-        pending = true;
+        if (pending != 0 || nextRequest == Long.MAX_VALUE || !ClientPlayNetworking.canSend(TreasuryPackets.Request.TYPE)) return;
+        if (action != TreasuryPackets.OPEN && (state == null || needsRefresh || needsContext || parse(amount.getValue()) < 1)) return;
+        pending = latestRequest = ++nextRequest;
         sentAt = System.currentTimeMillis();
-        ClientPlayNetworking.send(new TreasuryPackets.Request(screen, state == null ? NONE : state.session(),
+        ClientPlayNetworking.send(new TreasuryPackets.Request(screen, pending, state == null ? NONE : state.session(),
                 state == null ? 0 : state.revision(), action, context.entity().ref(), parse(amount.getValue())));
     }
 
     void accept(TreasuryPackets.State state) {
         if (!screen.equals(state.screen())) return;
+        if (state.request() != 0 && state.request() != latestRequest) return;
         this.state = state;
-        pending = false;
+        pending = 0;
+        lastReadAt = System.currentTimeMillis();
+        needsContext = state.result().equals("stale_context") || state.result().equals("missing_entity");
+        needsRefresh = state.balance() < 0 || state.result().equals("stale");
+        feedback = text(state.result());
     }
 
     @Override
     public void tick() {
-        if (minecraft.player == null || minecraft.level == null) { onClose(); return; }
-        if (pending && System.currentTimeMillis() - sentAt > 10_000) {
-            pending = false;
-            state = null;
+        if (minecraft.player == null || minecraft.level == null) { minecraft.setScreen(null); return; }
+        if (pending != 0 && System.currentTimeMillis() - sentAt > 10_000) {
+            pending = 0;
+            needsRefresh = true;
+            feedback = text("retry");
         }
+        if (pending == 0 && state != null && !needsRefresh && !needsContext
+                && System.currentTimeMillis() - lastReadAt > 5_000) send(TreasuryPackets.OPEN);
     }
 
-    @Override public void onClose() { minecraft.setScreen(returnTo); }
+    @Override public void onClose() {
+        if (minecraft.player != null && minecraft.level != null && state != null
+                && nextRequest < Long.MAX_VALUE && ClientPlayNetworking.canSend(TreasuryPackets.Request.TYPE)) {
+            ClientPlayNetworking.send(new TreasuryPackets.Request(screen, ++nextRequest, state.session(), state.revision(),
+                    TreasuryPackets.CLOSE, context.entity().ref(), 0));
+        }
+        minecraft.setScreen(minecraft.player == null || minecraft.level == null ? null : returnTo);
+    }
     @Override public boolean isPauseScreen() { return false; }
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
         long coins = parse(amount.getValue());
-        boolean ready = !pending && state != null && state.balance() >= 0;
+        boolean ready = pending == 0 && !needsRefresh && !needsContext && state != null && state.balance() >= 0;
         deposit.active = ready && state.deposit() && coins > 0 && coins <= state.wallet();
         withdraw.active = ready && state.withdraw() && coins > 0 && coins <= state.balance();
-        refresh.active = !pending;
+        refresh.active = pending == 0;
         graphics.fill(0, 0, width, height, KingdomUi.BACKGROUND);
         KingdomUi.frame(graphics, font, title, bounds.x(), bounds.y(), bounds.width(), bounds.height());
-        NationsIdentity.draw(graphics, font, context.entity(), bounds.left(), bounds.y() + 42, bounds.contentWidth());
+        if (!needsContext) NationsIdentity.draw(graphics, font, context.entity(), bounds.left(), bounds.y() + 42, bounds.contentWidth());
+        else graphics.drawString(font, KingdomUi.ellipsize(font, text("stale_identity"), bounds.contentWidth()),
+                bounds.left(), bounds.y() + 42, KingdomUi.MUTED, false);
         if (state != null && state.balance() >= 0) {
-            graphics.drawString(font, KingdomUi.ellipsize(font, text("balance", state.balance()), bounds.contentWidth()), bounds.left(), bounds.y() + 82, KingdomUi.INK, false);
+            graphics.drawString(font, KingdomUi.ellipsize(font, text(needsRefresh ? "cached_balance" : "balance", state.balance()), bounds.contentWidth()), bounds.left(), bounds.y() + 82, KingdomUi.INK, false);
             graphics.drawString(font, KingdomUi.ellipsize(font, text("wallet", state.wallet()), bounds.contentWidth()), bounds.left(), bounds.y() + 96, KingdomUi.MUTED, false);
         }
-        Component feedback = pending ? text("loading") : state == null ? text("retry") : text(state.result());
-        KingdomUi.feedback(graphics, font, feedback, bounds.left(), bounds.footerY() - 16, bounds.contentWidth(), KingdomUi.Feedback.NEUTRAL);
+        KingdomUi.feedback(graphics, font, pending != 0 ? text("loading") : feedback,
+                bounds.left(), bounds.footerY() - 16, bounds.contentWidth(),
+                needsRefresh || needsContext ? KingdomUi.Feedback.ERROR : KingdomUi.Feedback.NEUTRAL);
         super.render(graphics, mouseX, mouseY, delta);
     }
 }
