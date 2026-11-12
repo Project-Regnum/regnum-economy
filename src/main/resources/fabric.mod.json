@@ -1,0 +1,32 @@
+{
+	"schemaVersion": 1,
+	"id": "regnum-economy",
+	"version": "${version}",
+	"name": "Regnum Economy",
+	"description": "Coin balances, player trades, and city markets for Project Regnum.",
+
+	"license": "CC0-1.0",
+	"icon": "assets/regnum-economy/textures/item/gold_coin.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"dev.regnum.economy.RegnumEconomy"
+		],
+		"client": [
+			"dev.regnum.economy.client.RegnumEconomyClient"
+		]
+	},
+	"mixins": [
+		"regnum-economy.mixins.json",
+		{
+			"config": "regnum-economy.client.mixins.json",
+			"environment": "client"
+		}
+	],
+	"depends": {
+		"fabricloader": ">=0.20.1",
+		"minecraft": "~1.21.1",
+		"java": ">=21",
+		"fabric-api": "*"
+	}
+}
