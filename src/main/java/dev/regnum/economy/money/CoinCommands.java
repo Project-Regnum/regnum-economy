@@ -1,7 +1,6 @@
 package dev.regnum.economy.money;
 
 import com.mojang.brigadier.arguments.LongArgumentType;
-import dev.regnum.economy.integration.AuthAccess;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.arguments.EntityArgument;
@@ -17,12 +16,8 @@ public final class CoinCommands {
 
     public static void register() {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
-            dispatcher.register(literal("pay")
-                    .then(argument("player", EntityArgument.player())
-                            .then(argument("amount", LongArgumentType.longArg(1))
-                                    .executes(context -> pay(context.getSource(),
-                                            EntityArgument.getPlayer(context, "player"),
-                                            LongArgumentType.getLong(context, "amount"))))));
+            dispatcher.register(literal("wallet").executes(context ->
+                    WalletMenu.open(context.getSource().getPlayerOrException()) ? 1 : 0));
 
             dispatcher.register(literal("economy").requires(source -> source.hasPermission(2))
                     .then(literal("grant")
@@ -34,33 +29,10 @@ public final class CoinCommands {
         });
     }
 
-    private static int pay(CommandSourceStack source, ServerPlayer recipient, long amount)
-            throws com.mojang.brigadier.exceptions.CommandSyntaxException {
-        ServerPlayer sender = source.getPlayerOrException();
-        if (!AuthAccess.permits(sender) || !AuthAccess.permits(recipient)) {
-            source.sendFailure(Component.translatable("message.regnum-economy.pay.login"));
-            return 0;
-        }
-        var result = CoinBalances.transfer(sender, recipient, amount);
-        if (result != CoinBalances.TransferResult.SUCCESS) {
-            String key = switch (result) {
-                case SAME_PLAYER -> "self";
-                case INSUFFICIENT_FUNDS -> "insufficient";
-                case RECIPIENT_LIMIT -> "recipient_limit";
-                case SUCCESS -> throw new IllegalStateException("Successful payment cannot fail");
-            };
-            source.sendFailure(Component.translatable("message.regnum-economy.pay." + key));
-            return 0;
-        }
-
-        source.sendSuccess(() -> Component.translatable("message.regnum-economy.pay.sent", amount, recipient.getDisplayName()), false);
-        recipient.sendSystemMessage(Component.translatable("message.regnum-economy.pay.received", amount, sender.getDisplayName()));
-        return 1;
-    }
-
     private static int grant(CommandSourceStack source, ServerPlayer recipient, long amount) {
-        if (!CoinBalances.credit(recipient, amount)) {
-            source.sendFailure(Component.translatable("message.regnum-economy.pay.recipient_limit"));
+        String failure = CoinIssuance.issue(source, recipient, amount);
+        if (failure != null) {
+            source.sendFailure(Component.translatable("message.regnum-economy.wallet." + failure));
             return 0;
         }
 
