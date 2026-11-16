@@ -59,11 +59,15 @@ final class BalanceSlot extends AbstractButton {
             setX(layout.regnumEconomy$getLeftPos() + layout.regnumEconomy$getImageWidth() + 4);
         }
 
+        // Keep the creative-inventory badge outside the container; use the opposite edge if needed.
+        if (getRight() > screen.width - 2) setX(layout.regnumEconomy$getLeftPos() - getWidth() - 4);
+        visible &= getX() >= 2 && getRight() <= screen.width - 2 && getBottom() <= screen.height - 2;
         if (visible && displayedBalance != balance) {
             displayedBalance = balance;
             displayCount = compactCount(balance);
             setMessage(Component.translatable("screen.regnum-economy.balance", Long.toString(balance)));
-            setTooltip(Tooltip.create(getMessage()));
+            setTooltip(Tooltip.create(getMessage().copy().append(". ").append(Component.translatable("screen.regnum-economy.wallet.open"))));
+            setTooltipDelay(java.time.Duration.ofMillis(500));
         }
     }
 
@@ -90,13 +94,8 @@ final class BalanceSlot extends AbstractButton {
         graphics.fill(x, y, x + 20, y + 20, isHoveredOrFocused() ? KingdomUi.INK : KingdomUi.GOLD);
         graphics.fill(x + 1, y + 1, x + 19, y + 19, KingdomUi.RECESS);
         graphics.blit(ICON, x + 2, y + 2, 0f, 0f, 16, 16, 16, 16);
-        int width = client.font.width(displayCount);
-        float scale = Math.min(1f, 18f / Math.max(1, width));
-        graphics.pose().pushPose();
-        graphics.pose().translate(x + 19 - width * scale, y + 19 - client.font.lineHeight * scale, 0);
-        graphics.pose().scale(scale, scale, 1);
-        graphics.drawString(client.font, displayCount, 0, 0, 0xffffffff, true);
-        graphics.pose().popPose();
+        String label = KingdomUi.ellipsize(client.font, Component.literal(displayCount), 18);
+        graphics.drawString(client.font, label, x + 19 - client.font.width(label), y + 19 - client.font.lineHeight, 0xffffffff, true);
     }
 
     @Override

@@ -1,6 +1,8 @@
 package dev.regnum.economy.client;
 
 import dev.regnum.economy.trade.TradeMenu;
+import dev.sakhno.regnum.nations.client.ui.KingdomUi;
+import net.minecraft.client.gui.components.Tooltip;
 import dev.regnum.economy.trade.TradePackets;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.gui.GuiGraphics;
@@ -14,10 +16,11 @@ import org.lwjgl.glfw.GLFW;
 
 final class TradeScreen extends AbstractContainerScreen<TradeMenu> {
     private static final String TEXT = "screen.regnum-economy.trade.";
-    private static final int LABEL = 0xff404040;
+    private static final int LABEL = KingdomUi.INK;
 
     private EditBox amount;
     private Button confirm;
+    private Component feedback = Component.translatable(TEXT + "pending");
     private boolean settingAmount;
     private long submittedRevision = -1;
     private long submittedAt;
@@ -47,12 +50,10 @@ final class TradeScreen extends AbstractContainerScreen<TradeMenu> {
             }
         });
 
-        confirm = addRenderableWidget(Button.builder(Component.translatable(TEXT + "confirm"),
-                button -> send(TradePackets.Action.CONFIRM, 0))
-                .bounds(leftPos + 10, topPos + 120, 110, 18).build());
-        addRenderableWidget(Button.builder(Component.translatable(TEXT + "cancel"),
-                button -> send(TradePackets.Action.CANCEL, 0))
-                .bounds(leftPos + 126, topPos + 120, 110, 18).build());
+        confirm = addRenderableWidget(new KingdomUi.RoyalButton(leftPos + 10, topPos + 120, 110, Component.translatable(TEXT + "confirm"),
+                button -> send(TradePackets.Action.CONFIRM, 0), KingdomUi.ButtonStyle.PRIMARY));
+        addRenderableWidget(new KingdomUi.RoyalButton(leftPos + 126, topPos + 120, 110, Component.translatable(TEXT + "cancel"),
+                button -> send(TradePackets.Action.CANCEL, 0)));
         updateControls();
     }
 
@@ -92,6 +93,7 @@ final class TradeScreen extends AbstractContainerScreen<TradeMenu> {
             confirm.active = false;
             return;
         }
+        amount.setTooltip(Tooltip.create(Component.translatable(TEXT + "available", Long.toString(state.available()))));
         boolean locked = state.seconds() > 0;
         boolean pending = state.revision() == submittedRevision;
         // Coalesce edits typed while the preceding amount is awaiting acknowledgement.
@@ -135,39 +137,47 @@ final class TradeScreen extends AbstractContainerScreen<TradeMenu> {
         updateControls();
         super.render(graphics, mouseX, mouseY, delta);
         renderTooltip(graphics, mouseX, mouseY);
+        if (mouseX >= leftPos + 8 && mouseX < leftPos + imageWidth - 8) {
+            if (mouseY >= topPos + 106 && mouseY < topPos + 119) KingdomUi.tooltip(graphics, font, feedback, mouseX, mouseY);
+            else if (menu.state() != null && mouseY >= topPos + 4 && mouseY < topPos + 18)
+                KingdomUi.tooltip(graphics, font, title.copy().append(". ").append(Component.translatable(TEXT + "available", menu.state().available())), mouseX, mouseY);
+        }
     }
 
     @Override
     protected void renderBg(GuiGraphics graphics, float delta, int mouseX, int mouseY) {
-        graphics.fill(leftPos, topPos, leftPos + imageWidth, topPos + imageHeight, 0xff222222);
-        graphics.fill(leftPos + 1, topPos + 1, leftPos + imageWidth - 1, topPos + imageHeight - 1, 0xff555555);
-        graphics.fill(leftPos + 1, topPos + 1, leftPos + imageWidth - 2, topPos + imageHeight - 2, 0xffffffff);
-        graphics.fill(leftPos + 2, topPos + 2, leftPos + imageWidth - 2, topPos + imageHeight - 2, 0xffc6c6c6);
+        graphics.fill(leftPos, topPos, leftPos + imageWidth, topPos + imageHeight, KingdomUi.GOLD);
+        graphics.fill(leftPos + 1, topPos + 1, leftPos + imageWidth - 1, topPos + imageHeight - 1, KingdomUi.BACKGROUND);
+        graphics.fill(leftPos + 123, topPos + 20, leftPos + 124, topPos + 104, KingdomUi.BORDER);
 
         for (Slot slot : menu.slots) {
             int x = leftPos + slot.x - 1;
             int y = topPos + slot.y - 1;
-            graphics.fill(x, y, x + 18, y + 18, 0xff373737);
-            graphics.fill(x + 1, y + 1, x + 18, y + 18, 0xffffffff);
-            graphics.fill(x + 1, y + 1, x + 17, y + 17, 0xff8b8b8b);
+            graphics.fill(x, y, x + 18, y + 18, KingdomUi.BORDER);
+            graphics.fill(x + 1, y + 1, x + 18, y + 18, KingdomUi.BORDER);
+            graphics.fill(x + 1, y + 1, x + 17, y + 17, KingdomUi.RECESS);
         }
     }
 
     @Override
     protected void renderLabels(GuiGraphics graphics, int mouseX, int mouseY) {
-        drawFitted(graphics, title, 8, 6, 226);
+        drawFitted(graphics, title, 8, 6, 112);
+        if (menu.state() != null) drawFitted(graphics, Component.translatable(TEXT + "balance", menu.state().available()), 126, 6, 110);
         graphics.drawString(font, playerInventoryTitle, inventoryLabelX, inventoryLabelY, LABEL, false);
         TradePackets.State state = menu.state();
-        label(graphics, "own_offer", 12, 20, state != null && state.ownConfirmed() ? 0xff246233 : LABEL);
-        label(graphics, "other_offer", 132, 20, state != null && state.otherConfirmed() ? 0xff246233 : LABEL);
+        label(graphics, "own_offer", 12, 20, state != null && state.ownConfirmed() ? KingdomUi.GOLD : LABEL);
+        label(graphics, "other_offer", 132, 20, state != null && state.otherConfirmed() ? KingdomUi.GOLD : LABEL);
         label(graphics, "coins", 12, 93, LABEL);
         if (state == null) {
+            drawFitted(graphics, Component.translatable(TEXT + "pending"), 12, 108, 224);
             return;
         }
         drawFitted(graphics, Component.translatable(TEXT + "coin_count", Long.toString(state.otherCoins())), 132, 93, 104);
         Component status;
         if (state.revision() == submittedRevision && System.currentTimeMillis() - submittedAt > 10_000) {
             status = Component.translatable(TEXT + "timeout");
+        } else if (state.revision() == submittedRevision) {
+            status = Component.translatable(TEXT + "pending");
         } else if (state.seconds() > 0) {
             status = Component.translatable(TEXT + "countdown", state.seconds());
         } else if (parseAmount(amount.getValue()) > state.available()) {
@@ -185,19 +195,28 @@ final class TradeScreen extends AbstractContainerScreen<TradeMenu> {
         } else {
             status = Component.translatable(TEXT + (hasOffer(state) ? "review" : "empty_offer"));
         }
+        feedback = status;
         drawFitted(graphics, status, 12, 108, 224);
     }
 
+    @Override public Component getNarrationMessage() {
+        var state = menu.state();
+        return title.copy().append(". ").append(feedback).append(". ").append(state == null ? Component.empty()
+                : Component.translatable(TEXT + "summary", state.available(), state.ownCoins(), state.otherCoins(),
+                        Component.translatable(TEXT + (state.ownConfirmed() ? "confirmed" : "editing")),
+                        Component.translatable(TEXT + (state.otherConfirmed() ? "confirmed" : "editing"))));
+    }
+
     private void label(GuiGraphics graphics, String key, int x, int y, int color) {
-        graphics.drawString(font, Component.translatable(TEXT + key), x, y, color, false);
+        Component label = Component.translatable(TEXT + key);
+        if (!key.equals("coins") && menu.state() != null) {
+            boolean confirmed = key.equals("own_offer") ? menu.state().ownConfirmed() : menu.state().otherConfirmed();
+            label = Component.translatable(TEXT + (confirmed ? "confirmed_items" : "editing_items"), label);
+        }
+        graphics.drawString(font, KingdomUi.ellipsize(font, label, key.equals("coins") ? 34 : 104), x, y, color, false);
     }
 
     private void drawFitted(GuiGraphics graphics, Component text, int x, int y, int width) {
-        float scale = Math.min(1f, (float) width / Math.max(1, font.width(text)));
-        graphics.pose().pushPose();
-        graphics.pose().translate(x, y, 0);
-        graphics.pose().scale(scale, scale, 1);
-        graphics.drawString(font, text, 0, 0, LABEL, false);
-        graphics.pose().popPose();
+        graphics.drawString(font, KingdomUi.ellipsize(font, text, width), x, y, LABEL, false);
     }
 }

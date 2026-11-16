@@ -260,6 +260,7 @@ public final class Markets {
         String name = city == null ? market.name : city.name();
         player.sendSystemMessage(text(own ? "my_orders" : "title", name).copy().withStyle(ChatFormatting.GOLD));
         boolean open = active(market, city);
+        player.sendSystemMessage(text("list_help").copy().withStyle(ChatFormatting.GRAY));
         if (!open) {
             player.sendSystemMessage(text("inactive"));
         }
@@ -303,12 +304,16 @@ public final class Markets {
                     .append(" ").append(action("claim_action", "/market claim", ClickEvent.Action.RUN_COMMAND));
         }
         player.sendSystemMessage(navigation);
+        if (open) player.sendSystemMessage(action("sell_action", "/market sell ", ClickEvent.Action.SUGGEST_COMMAND)
+                .append(" ").append(action("order_action", "/market order ", ClickEvent.Action.SUGGEST_COMMAND)));
         return 1;
     }
 
     private static MutableComponent action(String label, String command, ClickEvent.Action type) {
         return text(label).copy().withStyle(style ->
-                style.withColor(ChatFormatting.AQUA).withClickEvent(new ClickEvent(type, command)));
+                style.withColor(ChatFormatting.GOLD).withUnderlined(true).withClickEvent(new ClickEvent(type, command))
+                        .withHoverEvent(new net.minecraft.network.chat.HoverEvent(net.minecraft.network.chat.HoverEvent.Action.SHOW_TEXT,
+                                text(type == ClickEvent.Action.SUGGEST_COMMAND ? "suggest_help" : "action_help", command))));
     }
 
     static int post(ServerPlayer player, Kind kind, ItemStack item, int quantity, long price) {

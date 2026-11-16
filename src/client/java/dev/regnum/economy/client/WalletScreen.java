@@ -32,16 +32,18 @@ final class WalletScreen extends AbstractContainerScreen<WalletMenu> {
     private EditBox amount;
     private Button deposit, depositAll, withdraw, refresh;
     private int selected;
+    private boolean withdrawing;
+    private Button depositMode, withdrawMode;
     private long nextRequest, latestRequest, pending, sentAt;
     private boolean needsRefresh;
-    private Component feedback = Component.translatable(TEXT + "select");
+    private Component feedback = Component.empty();
 
     WalletScreen(WalletMenu menu, Inventory inventory, Component title) {
         super(menu, inventory, title);
-        imageWidth = 186;
+        imageWidth = 312;
         imageHeight = 218;
         inventoryLabelX = 12;
-        inventoryLabelY = 122;
+        inventoryLabelY = 123;
         selected = 27 + inventory.selected;
     }
 
@@ -49,21 +51,63 @@ final class WalletScreen extends AbstractContainerScreen<WalletMenu> {
     protected void init() {
         super.init();
         String previous = amount == null ? "" : amount.getValue();
-        amount = addRenderableWidget(KingdomUi.field(font, leftPos + 12, topPos + 78, 78,
+        amount = addRenderableWidget(KingdomUi.field(font, leftPos + 12, topPos + 78, 138,
                 Component.translatable(TEXT + "amount")));
         amount.setMaxLength(19);
         amount.setFilter(value -> value.isEmpty() || parse(value) >= 0);
         amount.setValue(previous);
-        deposit = addRenderableWidget(new KingdomUi.RoyalButton(leftPos + 12, topPos + 52, 78,
+        depositMode = addRenderableWidget(new KingdomUi.RoyalButton(leftPos + 12, topPos + 52, 138,
+                Component.translatable(TEXT + "deposit_mode"), b -> { withdrawing = false; updateMode(); }));
+        withdrawMode = addRenderableWidget(new KingdomUi.RoyalButton(leftPos + 156, topPos + 52, 138,
+                Component.translatable(TEXT + "withdraw_mode"), b -> { withdrawing = true; updateMode(); }));
+        deposit = addRenderableWidget(new KingdomUi.RoyalButton(leftPos + 12, topPos + 78, 138,
                 Component.translatable(TEXT + "deposit"), button -> send(WalletPackets.Action.DEPOSIT_STACK)));
-        depositAll = addRenderableWidget(new KingdomUi.RoyalButton(leftPos + 96, topPos + 52, 78,
+        depositAll = addRenderableWidget(new KingdomUi.RoyalButton(leftPos + 156, topPos + 78, 138,
                 Component.translatable(TEXT + "deposit_all"), button -> send(WalletPackets.Action.DEPOSIT_ALL)));
-        withdraw = addRenderableWidget(new KingdomUi.RoyalButton(leftPos + 96, topPos + 78, 78,
+        withdraw = addRenderableWidget(new KingdomUi.RoyalButton(leftPos + 156, topPos + 78, 138,
                 Component.translatable(TEXT + "withdraw"), button -> send(WalletPackets.Action.WITHDRAW)));
-        refresh = addRenderableWidget(new KingdomUi.RoyalButton(leftPos + 150, topPos + 32, 24,
-                Component.translatable(TEXT + "refresh"), button -> send(WalletPackets.Action.REFRESH)));
+        refresh = addRenderableWidget(new KingdomUi.RoyalButton(leftPos + imageWidth - 36, topPos + 30, 24,
+                Component.translatable(TEXT + "refresh"), button -> send(WalletPackets.Action.REFRESH)) {
+            @Override protected void renderContent(GuiGraphics g, int color, int offset) {
+                g.drawString(font, "↻", getX()+7+offset, getY()+6+offset, color, false);
+            }
+        });
+        addRenderableWidget(new KingdomUi.RoyalButton(leftPos + imageWidth - 32, topPos + 8, 20,
+                Component.translatable(TEXT + "close"), b -> onClose()) {
+            @Override protected void renderContent(GuiGraphics g, int color, int offset) {
+                g.drawString(font, "×", getX()+7+offset, getY()+6+offset, color, false);
+            }
+        });
+        addRenderableWidget(KingdomUi.paragraph(font, leftPos + 186, topPos + 108, 112, 96,
+                Component.translatable(TEXT + "conversion_help")));
+        amount.setHint(Component.translatable(TEXT + "amount"));
+        updateMode();
         selection.clear();
         for (int i = 0; i < menu.slots.size(); i++) selection.add(addRenderableWidget(new CoinButton(i)));
+    }
+
+    private void updateMode() {
+        amount.visible = withdraw.visible = withdrawing;
+        amount.active = withdrawing;
+        amount.setFocused(withdrawing);
+        deposit.visible = depositAll.visible = !withdrawing;
+        ((KingdomUi.RoyalButton)depositMode).selected(!withdrawing);
+        ((KingdomUi.RoyalButton)withdrawMode).selected(withdrawing);
+        setFocused(withdrawing ? amount : depositMode);
+    }
+
+    private Component preview() {
+        if (withdrawing) {
+            long copper = parse(amount.getValue());
+            return copper <= 0 ? Component.translatable(TEXT + "withdraw_help")
+                    : Component.translatable(TEXT + "withdraw_preview", copper / Denomination.GOLD.copperValue(),
+                            copper % Denomination.GOLD.copperValue() / Denomination.SILVER.copperValue(),
+                            copper % Denomination.SILVER.copperValue());
+        }
+        ItemStack stack = menu.slots.get(selected).getItem();
+        Denomination coin = Denomination.of(stack);
+        return coin == null ? Component.translatable(TEXT + "select")
+                : Component.translatable(TEXT + "preview", (long)stack.getCount() * coin.copperValue(), stack.getCount(), stack.getHoverName());
     }
 
     private static long parse(String text) {
@@ -120,8 +164,8 @@ final class WalletScreen extends AbstractContainerScreen<WalletMenu> {
 
     @Override
     public boolean keyPressed(int key, int scanCode, int modifiers) {
-        if (amount.isFocused() && key != GLFW.GLFW_KEY_ESCAPE && key != GLFW.GLFW_KEY_TAB) {
-            if (key == GLFW.GLFW_KEY_ENTER || key == GLFW.GLFW_KEY_KP_ENTER) send(WalletPackets.Action.WITHDRAW);
+        if (amount.visible && amount.isFocused() && key != GLFW.GLFW_KEY_ESCAPE && key != GLFW.GLFW_KEY_TAB) {
+            if (key == GLFW.GLFW_KEY_ENTER || key == GLFW.GLFW_KEY_KP_ENTER) setFocused(withdraw);
             else amount.keyPressed(key, scanCode, modifiers);
             return true;
         }
@@ -132,7 +176,7 @@ final class WalletScreen extends AbstractContainerScreen<WalletMenu> {
             case GLFW.GLFW_KEY_DOWN -> 9;
             default -> 0;
         };
-        if (movement != 0) {
+        if (movement != 0 && !withdrawing) {
             selected = selected == 36 ? 8 : selected == 8 && movement == -9 ? 36
                     : Math.floorMod(selected + movement, 36);
             setFocused(selection.get(selected));
@@ -148,17 +192,28 @@ final class WalletScreen extends AbstractContainerScreen<WalletMenu> {
     public void render(GuiGraphics graphics, int x, int y, float delta) {
         WalletPackets.State state = menu.state();
         boolean ready = state != null && pending == 0 && !needsRefresh;
-        deposit.active = ready && selected >= 0 && Denomination.of(menu.slots.get(selected).getItem()) != null;
-        depositAll.active = ready;
-        withdraw.active = ready && parse(amount.getValue()) > 0 && parse(amount.getValue()) <= state.balance();
+        deposit.active = !withdrawing && ready && selected >= 0 && Denomination.of(menu.slots.get(selected).getItem()) != null;
+        depositAll.active = !withdrawing && ready;
+        withdraw.active = withdrawing && ready && parse(amount.getValue()) > 0 && parse(amount.getValue()) <= state.balance();
         refresh.active = pending == 0;
+        amount.setEditable(withdrawing && pending == 0);
         selection.forEach(CoinButton::update);
         super.render(graphics, x, y, delta);
+        for (CoinButton slot : selection) if (slot.isMouseOver(x, y))
+            KingdomUi.tooltip(graphics, font, font.split(slot.getMessage().copy().append("\n")
+                    .append(Component.translatable(TEXT + "selection_help")), Math.min(200, width - 24)), x, y, 6);
+        if (x >= leftPos + 12 && x < leftPos + imageWidth - 48) {
+            if (x < leftPos + 150 && y >= topPos + 103 && y < topPos + 114) KingdomUi.tooltip(graphics, font, preview(), x, y);
+            else if (x < leftPos + 150 && y >= topPos + 114 && y < topPos + 123) KingdomUi.tooltip(graphics, font, pending != 0 ? Component.translatable(TEXT + "pending") : feedback, x, y);
+            else if (state != null && y >= topPos + 30 && y < topPos + 48) KingdomUi.tooltip(graphics, font, Component.translatable("screen.regnum-economy.balance", state.balance()), x, y);
+        }
     }
 
     @Override
     protected void renderBg(GuiGraphics graphics, float delta, int x, int y) {
         KingdomUi.frame(graphics, font, title, leftPos, topPos, imageWidth, imageHeight);
+        graphics.fill(leftPos + 10, topPos + 30, leftPos + imageWidth - 10, topPos + 48, KingdomUi.RECESS);
+        graphics.fill(leftPos + 180, topPos + 106, leftPos + 181, topPos + 208, KingdomUi.BORDER);
         for (Slot slot : menu.slots) {
             int sx = leftPos + slot.x - 1, sy = topPos + slot.y - 1;
             graphics.fill(sx, sy, sx + 18, sy + 18, KingdomUi.BORDER);
@@ -170,19 +225,21 @@ final class WalletScreen extends AbstractContainerScreen<WalletMenu> {
     protected void renderLabels(GuiGraphics graphics, int x, int y) {
         WalletPackets.State state = menu.state();
         if (state != null) fitted(graphics, Component.translatable("screen.regnum-economy.balance",
-                Long.toString(state.balance())), 12, 38, 132);
-        fitted(graphics, pending != 0 ? Component.translatable(TEXT + "pending") : feedback, 12, 103, 138);
+                Long.toString(state.balance())), 16, 35, imageWidth - 60);
+        else fitted(graphics, Component.translatable(TEXT + "pending"), 16, 35, imageWidth - 60);
+        fitted(graphics, preview(), 12, 103, 138);
+        fitted(graphics, pending != 0 ? Component.translatable(TEXT + "pending") : feedback, 12, 114, 138);
         graphics.drawString(font, KingdomUi.ellipsize(font, Component.translatable(TEXT + "selection_mode"), 162),
                 inventoryLabelX, inventoryLabelY, KingdomUi.MUTED, false);
     }
 
     private void fitted(GuiGraphics graphics, Component text, int x, int y, int width) {
-        float scale = Math.min(1f, (float) width / Math.max(1, font.width(text)));
-        graphics.pose().pushPose();
-        graphics.pose().translate(x, y, 0);
-        graphics.pose().scale(scale, scale, 1);
-        graphics.drawString(font, text, 0, 0, KingdomUi.INK, false);
-        graphics.pose().popPose();
+        graphics.drawString(font, KingdomUi.ellipsize(font, text, width), x, y, KingdomUi.INK, false);
+    }
+
+    @Override public Component getNarrationMessage() {
+        return title.copy().append(". ").append(menu.state() == null ? Component.translatable(TEXT + "pending")
+                : Component.translatable("screen.regnum-economy.balance", menu.state().balance())).append(". ").append(preview()).append(". ").append(feedback);
     }
 
     private final class CoinButton extends AbstractButton {
@@ -197,13 +254,14 @@ final class WalletScreen extends AbstractContainerScreen<WalletMenu> {
         }
 
         void update() {
+            active = !withdrawing;
             ItemStack stack = menu.slots.get(index).getItem();
             if (getMessage().getString().isEmpty() || chosen != (selected == index) || !ItemStack.matches(last, stack)) {
                 last = stack.copy();
                 chosen = selected == index;
                 setMessage(Component.translatable(TEXT + (chosen ? "selected_stack" : "select_stack"),
                         index + 1, stack.isEmpty() ? Component.translatable(TEXT + "empty") : stack.getHoverName(), stack.getCount()));
-                setTooltip(Tooltip.create(getMessage().copy().append("\n").append(Component.translatable(TEXT + "selection_help"))));
+                setTooltip(null);
             }
         }
 
@@ -217,7 +275,7 @@ final class WalletScreen extends AbstractContainerScreen<WalletMenu> {
 
         @Override
         protected void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
-            if (chosen || isHoveredOrFocused()) {
+            if (!withdrawing && (chosen || isHoveredOrFocused())) {
                 int x = getX(), y = getY(), color = chosen ? KingdomUi.GOLD : KingdomUi.INK;
                 graphics.fill(x, y, x + 18, y + 1, color);
                 graphics.fill(x, y + 17, x + 18, y + 18, color);

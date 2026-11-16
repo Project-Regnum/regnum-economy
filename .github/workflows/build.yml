@@ -9,9 +9,14 @@ on: [pull_request, push]
 jobs:
   build:
     runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: regnum-economy
     steps:
       - name: checkout repository
         uses: actions/checkout@v6
+        with:
+          path: regnum-economy
       - name: validate gradle wrapper
         uses: gradle/actions/wrapper-validation@v6
       - name: setup jdk
@@ -19,12 +24,24 @@ jobs:
         with:
           java-version: '25'
           distribution: 'microsoft'
+      - name: read Nations source lock
+        id: nations
+        run: sed -n 's/^nations_api_commit=/commit=/p' gradle.properties >> "$GITHUB_OUTPUT"
+      - name: checkout pinned Nations source
+        uses: actions/checkout@v6
+        with:
+          repository: Project-Regnum/regnum-nations
+          ref: ${{ steps.nations.outputs.commit }}
+          path: regnum-nations
+      - name: provision Nations dependency
+        working-directory: regnum-nations
+        run: bash ./gradlew remapJar --no-daemon --console=plain
       - name: make gradle wrapper executable
         run: chmod +x ./gradlew
       - name: build
-        run: ./gradlew build
+        run: ./gradlew test build --no-daemon --console=plain
       - name: capture build artifacts
         uses: actions/upload-artifact@v7
         with:
           name: Artifacts
-          path: build/libs/
+          path: regnum-economy/build/libs/

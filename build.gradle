@@ -11,10 +11,15 @@ repositories {
 	// for more information about repositories.
 }
 
+// Consume the sibling project's remapped output without rebuilding a possibly dirty checkout.
+// CI provisions this output from nations_api_commit; nations_jar remains an explicit override.
+def nationsProjectDir = file(providers.gradleProperty('nations_project').orElse('../regnum-nations').get())
+def nationsVersion = project.nations_version.toString()
 def nationsDependencyFile = file(providers.gradleProperty('nations_jar')
-		.orElse("libs/regnum-nations-${project.nations_api_commit}.jar").get())
+		.orElse(new File(nationsProjectDir, "build/libs/regnum-nations-${nationsVersion}.jar").path).get())
 def nationsCommit = project.nations_api_commit.toString()
 def nationsDigest = project.nations_content_sha256.toString()
+def nationsCiDigest = project.nations_ci_content_sha256.toString()
 
 // Fingerprint ZIP contents, not timestamps/compression. Repackaging identical bytes is allowed.
 def verifyNationsDependency = tasks.register('verifyNationsDependency') {
@@ -22,10 +27,18 @@ def verifyNationsDependency = tasks.register('verifyNationsDependency') {
 	description = 'Rejects a Nations artifact that does not match the pinned API build.'
 	doLast {
 		if (!nationsDependencyFile.isFile()) {
-			throw new GradleException("Build Nations PR #20 at ${nationsCommit} and supply -Pnations_jar=<jar>.")
+			throw new GradleException("Missing ${nationsDependencyFile}. Build Nations ${nationsVersion} at ${nationsCommit} with remapJar (see README.md), or supply -Pnations_jar=<jar>.")
 		}
 		def digest = java.security.MessageDigest.getInstance('SHA-256')
 		new java.util.zip.ZipFile(nationsDependencyFile).withCloseable { archive ->
+			def metadataEntry = archive.getEntry('fabric.mod.json')
+			if (metadataEntry == null) throw new GradleException('Missing Nations mod metadata')
+			def metadata = archive.getInputStream(metadataEntry).withCloseable {
+				new groovy.json.JsonSlurper().parse(it)
+			}
+			if (metadata.id != 'regnum-nations' || metadata.version != nationsVersion) {
+				throw new GradleException("Expected regnum-nations ${nationsVersion}, got ${metadata.id} ${metadata.version}")
+			}
 			def entries = java.util.Collections.list(archive.entries()).findAll { !it.directory }.sort { it.name }
 			if (entries.collect { it.name }.toSet().size() != entries.size()) throw new GradleException('Duplicate Nations JAR entries')
 			entries.each { entry ->
@@ -37,8 +50,8 @@ def verifyNationsDependency = tasks.register('verifyNationsDependency') {
 				digest.update(content)
 			}
 		}
-		if (java.util.HexFormat.of().formatHex(digest.digest()) != nationsDigest) {
-			throw new GradleException("Incompatible Nations JAR. This build requires the verified PR #20 artifact at ${nationsCommit}; see README.md.")
+		if (!(java.util.HexFormat.of().formatHex(digest.digest()) in [nationsDigest, nationsCiDigest])) {
+			throw new GradleException("Incompatible Nations JAR. This build requires an approved Nations ${nationsVersion} artifact; see README.md (CI source pin ${nationsCommit}).")
 		}
 	}
 }
@@ -63,7 +76,7 @@ dependencies {
 	// Fabric API. This is technically optional, but you probably want it anyway.
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
 
-	// Nations has no published API artifact. Use the mod built from the pinned API commit.
+	// Nations has no published API artifact; use the verified local project output.
 	modImplementation files(nationsDependencyFile)
 }
 
@@ -72,13 +85,15 @@ processResources {
 	def version = project.version
 	inputs.property "version", version
 	inputs.property 'nations_api_commit', nationsCommit
+	inputs.property 'nations_version', nationsVersion
 	inputs.property 'nations_content_sha256', nationsDigest
+	inputs.property 'nations_ci_content_sha256', nationsCiDigest
 
 	filesMatching("fabric.mod.json") {
-		expand "version": version
+		expand "version": version, nations_version: nationsVersion
 	}
 	filesMatching('regnum-economy-nations.properties') {
-		expand nations_api_commit: nationsCommit, nations_content_sha256: nationsDigest
+		expand nations_api_commit: nationsCommit, nations_version: nationsVersion, nations_content_sha256: nationsDigest, nations_ci_content_sha256: nationsCiDigest
 	}
 }
 
@@ -125,4 +140,37 @@ publishing {
 		// The repositories here will be used for publishing your artifact, not for
 		// retrieving dependencies.
 	}
+}
+
+// Opt-in UI checks against the same verified Nations artifact; no test-library dependency.
+sourceSets {
+    uiTest {
+        compileClasspath += sourceSets.client.compileClasspath + sourceSets.client.output + sourceSets.main.output
+        runtimeClasspath += sourceSets.client.runtimeClasspath + sourceSets.client.output + sourceSets.main.output
+    }
+}
+loom {
+    mods { "regnum-economy-ui-test" { sourceSet sourceSets.uiTest } }
+    runs {
+        uiTest {
+            client()
+            source sourceSets.uiTest
+            runDir 'build/run/uiTest'
+            programArgs '--width', '1100', '--height', '760'
+        }
+    }
+}
+
+// Required headless integration checks use only build/run/gameTest/world.
+fabricApi {
+    configureTests {
+        createSourceSet = true
+        modId = 'regnum-economy-test'
+        enableClientGameTests = false
+    }
+}
+tasks.register('resetGameTestWorld', Delete) { delete layout.buildDirectory.dir('run/gameTest/world') }
+tasks.named('runGameTest', JavaExec) {
+    dependsOn tasks.named('resetGameTestWorld')
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(21) }
 }

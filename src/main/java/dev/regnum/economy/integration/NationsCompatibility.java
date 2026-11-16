@@ -19,22 +19,25 @@ import java.util.zip.ZipFile;
 
 /** Runs before Nations entrypoint classes can link; no Minecraft or client class is loaded here. */
 public final class NationsCompatibility implements PreLaunchEntrypoint {
-    private static final String COMMIT = "483330f8523f38c4bc13ae68e43335921dc8dc90";
-
     @Override
     public void onPreLaunch() {
-        String guidance = "Regnum Economy requires Nations PR #20 at " + COMMIT
-                + ". Install the verified Nations JAR used to build Economy (see README.md); do not use a different 0.9.2 build.";
+        String guidance = "Regnum Economy requires the verified Nations JAR used to build Economy (see README.md).";
         try {
             Properties lock = new Properties();
             try (var input = getClass().getResourceAsStream("/regnum-economy-nations.properties")) {
                 if (input == null) throw new IOException("Missing packaged Nations compatibility lock");
                 lock.load(input);
             }
-            if (!COMMIT.equals(lock.getProperty("commit"))) throw new IOException("Incorrect Nations commit lock");
+            if (!lock.getProperty("commit", "").matches("[0-9a-f]{40}")
+                    || !lock.getProperty("sha256", "").matches("[0-9a-f]{64}")
+                    || !lock.getProperty("ci_sha256", "").matches("[0-9a-f]{64}")
+                    || lock.getProperty("version", "").isBlank()) {
+                throw new IOException("Invalid packaged Nations compatibility lock");
+            }
+            guidance += " Expected Nations " + lock.getProperty("version") + " (CI source pin " + lock.getProperty("commit") + ").";
             var loader = FabricLoader.getInstance();
             var nations = loader.getModContainer("regnum-nations")
-                    .orElseThrow(() -> new IllegalStateException(guidance));
+                    .orElseThrow(() -> new IllegalStateException("Regnum Nations is not installed"));
             Path artifact;
             if (loader.isDevelopmentEnvironment()) {
                 String source = System.getProperty("regnumEconomy.nationsSourceJar");
@@ -47,7 +50,7 @@ public final class NationsCompatibility implements PreLaunchEntrypoint {
                 }
                 artifact = origin.getPaths().getFirst();
             }
-            if (!Files.isRegularFile(artifact) || !fingerprint(artifact).equals(lock.getProperty("sha256"))) {
+            if (!Files.isRegularFile(artifact) || !java.util.List.of(lock.getProperty("sha256"), lock.getProperty("ci_sha256")).contains(fingerprint(artifact))) {
                 throw new IOException("The installed Nations artifact does not match the pinned build");
             }
         } catch (IOException | NoSuchAlgorithmException | RuntimeException failure) {
