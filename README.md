@@ -78,3 +78,7 @@ ownership/financial policies and revocation, transactional balance rollback,
 transfer/overflow, player-NBT balance persistence, conversion/inventory-full
 rejection and escrow persistence/recovery without duplicate returns. They do not
 replace live multiplayer or process-crash recovery testing.
+
+### Static dungeon integration artifact
+
+The local Nations content pin is now `9097ae36d67fe0e1ca59d02790a06c66dd43fb095c51a5e32a6d7079d4b3a9f9`, built from Nations base `b4c8ef2fb4cc751d621480a8fa768f5efd6f39ad` plus this sprint’s neutral dungeon protection and additive atlas overlay changes. The historical CI pin remains unchanged. Common/client compilation and remapped packaging were checked; no server, multiplayer, UI, or crash-recovery run was performed for this artifact. Build and install the matching Nations and Economy outputs together. The prelaunch fingerprint verifier remains enabled.
