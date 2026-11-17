@@ -19,6 +19,10 @@ Once the trade opens, drag items into your offer slots or enter a coin amount. E
 
 Trade drops are disabled because spawned world entities cannot participate in an inventory rollback. Completion and cancellation each commit both players together; unsuccessful cancellation keeps returns in persistent escrow. Client and server must use matching Economy builds.
 
+## NPCs
+
+Place a persistent merchant, banker, official, sentinel or resident with the in-game NPC commands. Right-click to open its dialogue. Merchants use the existing wallet and recoverable stock escrow. See [NPC setup, permissions and testing](docs/npcs.md).
+
 ## City markets
 
 Requires the verified Regnum Nations 0.12.0 build, exposing the API v1 originally introduced in PR #20. Place a `regnum-economy:market` block in a claimed chunk and look at it while running `/market register`. Current Nations city permissions control market creation, management, tax and treasury actions; kingdom authority does not grant city authority. With Regnum Auth installed, both participants must log in before trading; visitors also log in before using a market.

@@ -30,7 +30,7 @@ import java.util.function.IntSupplier;
 
 final class MarketData extends SavedData {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final int VERSION = 2;
+    private static final int VERSION = 3;
     private static final String FILE_ID = "regnum_economy_markets";
     static final int MAX_ORDERS = 128;
     static final int MAX_QUANTITY = 2304;
@@ -160,6 +160,7 @@ final class MarketData extends SavedData {
 
     final Map<Site, Market> markets = new HashMap<>();
     final Map<EntityRef, Treasury> treasuries = new HashMap<>();
+    final Map<UUID, MerchantStock> merchants = new HashMap<>();
     int nextOrder = 1;
     private CompoundTag unreadable;
     private List<Component> transactionMessages;
@@ -269,6 +270,15 @@ final class MarketData extends SavedData {
                     throw new IllegalArgumentException("Invalid treasury");
                 }
             }
+            if (version >= 3) {
+                for (Tag value : compounds(tag, "merchants")) {
+                    CompoundTag entry = (CompoundTag) value;
+                    UUID npc = entry.getUUID("npc");
+                    if (data.merchants.putIfAbsent(npc, MerchantStock.load(entry, registries)) != null) {
+                        throw new IllegalArgumentException("Duplicate merchant escrow");
+                    }
+                }
+            }
         } catch (RuntimeException e) {
             LOGGER.error("Regnum Economy could not read the market data. Markets are locked until it is repaired.", e);
             data.unreadable = tag.copy();
@@ -343,6 +353,9 @@ final class MarketData extends SavedData {
             balances.add(treasury);
         }
         tag.put("treasuries", balances);
+        ListTag escrow = new ListTag();
+        merchants.forEach((npc, merchant) -> escrow.add(merchant.save(npc, registries)));
+        tag.put("merchants", escrow);
         return tag;
     }
 
