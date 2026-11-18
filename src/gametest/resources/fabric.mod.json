@@ -3,6 +3,6 @@
   "id": "regnum-economy-test",
   "version": "1.0.0",
   "environment": "server",
-  "entrypoints": {"fabric-gametest": ["dev.regnum.economy.money.EconomyIntegrationTests", "dev.regnum.economy.trade.EscrowIntegrationTests"]},
+  "entrypoints": {"fabric-gametest": ["dev.regnum.economy.money.EconomyIntegrationTests", "dev.regnum.economy.trade.EscrowIntegrationTests", "dev.regnum.economy.npc.NpcIntegrationTests"]},
   "depends": {"regnum-economy": "*", "regnum-nations": "*", "fabric-gametest-api-v1": "*"}
 }

@@ -323,7 +323,7 @@ public final class WalletPersistence {
         }
     }
 
-    private static void recover(MinecraftServer server) {
+    static void recover(MinecraftServer server) {
         Path journal = server.getWorldPath(LevelResource.ROOT).resolve(JOURNAL);
         if (Files.notExists(journal)) return;
         try {

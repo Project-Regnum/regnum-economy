@@ -3,6 +3,9 @@ package dev.regnum.economy.client;
 import dev.regnum.economy.money.*;
 import dev.regnum.economy.trade.*;
 import dev.regnum.economy.market.TreasuryPackets;
+import dev.regnum.economy.npc.NpcPackets;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import dev.sakhno.regnum.nations.api.v1.*;
 import dev.sakhno.regnum.nations.api.client.v1.EconomyContext;
 import net.fabricmc.api.ClientModInitializer;
@@ -38,7 +41,7 @@ public final class EconomyUiChecks implements ClientModInitializer {
                     try (var pixels=net.minecraft.client.Screenshot.takeScreenshot(mc.getMainRenderTarget())) {
                         pixels.writeToFile(Path.of("checks/captures/phase-c-"+stage+".png"));
                     }
-                    if (stage==4) mc.stop();
+                    if (stage==5) mc.stop();
                     else { stage++; captureTicks=0; showCapture(mc,stage); }
                     return;
                 }
@@ -59,6 +62,7 @@ public final class EconomyUiChecks implements ClientModInitializer {
     }
     private void checkLocale(Minecraft mc) throws Exception {
         for (int[] size:List.of(new int[]{320,240},new int[]{640,360},new int[]{1100,760})) {
+            checkNpc(mc,size);
             Inventory inventory=new Inventory(null);
             var constructor=WalletMenu.class.getDeclaredConstructor(int.class,Inventory.class); constructor.setAccessible(true);
             var walletMenu=constructor.newInstance(1,inventory);
@@ -102,6 +106,40 @@ public final class EconomyUiChecks implements ClientModInitializer {
             }
         }
     }
+    private void checkNpc(Minecraft mc, int[] size) throws Exception {
+        var merchant = new NpcScreen(npcPage("merchant.quote", new ItemStack(Items.BREAD, 12),
+                List.of("review_buy", "review_sell", "previous", "next", "back"), 0));
+        check(mc, merchant, size);
+        var review = new NpcScreen(npcPage("merchant.confirm_buy", new ItemStack(Items.BREAD, 12),
+                List.of("cancel", "confirm"), 0));
+        check(mc, review, size);
+        require(((AbstractWidget)review.getFocused()).getMessage().equals(npcText("cancel")),
+                "Merchant confirmation initially focuses Cancel");
+        var editor = new NpcScreen(npcPage("edit_greeting", ItemStack.EMPTY, List.of("cancel", "save"), 240));
+        check(mc, editor, size);
+        var input = (EditBox)get(editor,"input");
+        input.setValue("An unsaved greeting");
+        editor.setFocused(input);
+        editor.resize(mc, size[0], size[1]);
+        require(editor.getFocused() == get(editor,"input") && ((EditBox)get(editor,"input")).getValue().equals("An unsaved greeting"),
+                "Resizing preserves the NPC edit field and focus");
+        require(!npcText("bank.open").getString().startsWith("npc.regnum-economy."), "NPC strings are localized");
+    }
+
+    private static Component npcText(String key, Object... args) {
+        return Component.translatable("npc.regnum-economy." + key, args);
+    }
+
+    private static NpcPackets.Page npcPage(String body, ItemStack item, List<String> actions, int inputLimit) {
+        Component message = switch (body) {
+            case "merchant.quote" -> npcText(body, item.getHoverName(), 12, 1, 2, 24, "100", "10", "6");
+            case "merchant.confirm_buy" -> npcText(body, 12, item.getHoverName(), 10);
+            default -> npcText(body);
+        };
+        return new NpcPackets.Page(ID, Component.literal("Mason"), npcText("role.merchant"), message, item,
+                actions.stream().map(EconomyUiChecks::npcText).toList(), inputLimit, npcText("edit_greeting"), "");
+    }
+
     private void checkMarketLinks() throws Exception {
         var c=Class.forName("dev.regnum.economy.market.Markets");
         var m=c.getDeclaredMethod("action",String.class,String.class,net.minecraft.network.chat.ClickEvent.Action.class); m.setAccessible(true);
@@ -133,6 +171,9 @@ public final class EconomyUiChecks implements ClientModInitializer {
             var c=TradeMenu.class.getDeclaredConstructor(int.class,Inventory.class); c.setAccessible(true);
             var menu=c.newInstance(2,inventory); menu.setState(new TradePackets.State(2,ID,7,100,200,12345,false,true,0,0));
             screen=new TradeScreen(menu,inventory,Component.literal("Alex ↔ Steve"));
+        } else if (stage==5) {
+            screen=new NpcScreen(npcPage("merchant.quote", new ItemStack(Items.BREAD, 12),
+                    List.of("review_buy", "review_sell", "next", "back"), 0));
         } else {
             var entity=new EntitySnapshot(EntityRef.city(ID),"Regnum",ID,ID,Optional.empty(),Optional.empty(),0xffaaaaaa,Optional.empty(),ResourceLocation.withDefaultNamespace("overworld"),BlockPos.ZERO);
             var treasury=new TreasuryScreen(new EconomyContext(entity,"owner",Set.of()),new TitleScreen());

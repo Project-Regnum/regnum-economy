@@ -41,6 +41,18 @@ public final class InventoryPlan {
         return remaining == 0 ? ItemStack.EMPTY : stack.copyWithCount(remaining);
     }
 
+    /** Remove only matching components from main inventory. Apply the plan only on success. */
+    public boolean remove(ItemStack sample, int count) {
+        for (int i = 0; i < slots.size() && count > 0; i++) {
+            ItemStack stack = slots.get(i);
+            if (stack.isEmpty() || !ItemStack.isSameItemSameComponents(sample, stack)) continue;
+            int moved = Math.min(count, stack.getCount());
+            count -= moved;
+            stack.shrink(moved);
+        }
+        return count == 0;
+    }
+
     public void apply() {
         boolean changed = false;
         for (int i = 0; i < slots.size(); i++) {

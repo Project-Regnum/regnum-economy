@@ -172,5 +172,5 @@ fabricApi {
 tasks.register('resetGameTestWorld', Delete) { delete layout.buildDirectory.dir('run/gameTest/world') }
 tasks.named('runGameTest', JavaExec) {
     dependsOn tasks.named('resetGameTestWorld')
-    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(21) }
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(25) }
 }

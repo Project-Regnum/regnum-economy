@@ -14,6 +14,7 @@ import net.minecraft.client.gui.screens.MenuScreens;
 public class RegnumEconomyClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
+        NpcClient.register();
         MenuScreens.register(TradeMenu.type(), TradeScreen::new);
         MenuScreens.register(WalletMenu.type(), WalletScreen::new);
         ClientPlayNetworking.registerGlobalReceiver(WalletPackets.State.TYPE, (payload, context) -> {
