@@ -122,6 +122,12 @@ public final class NpcIntegrationTests implements FabricGameTest {
         h.assertTrue(NpcMerchants.trade(shopper, npc, initial, true) == Result.SPACE
                 && CoinBalances.get(shopper) == 100 && quote(seller, npc).stock() == 4,
                 "Full inventory leaves stock and money untouched");
+        shopper.getInventory().setItem(0, named.copyWithCount(63));
+        var partial = shopper.getInventory().save(new net.minecraft.nbt.ListTag());
+        h.assertTrue(NpcMerchants.trade(shopper, npc, initial, true) == Result.SPACE
+                && CoinBalances.get(shopper) == 100 && quote(seller, npc).stock() == 4
+                && partial.equals(shopper.getInventory().save(new net.minecraft.nbt.ListTag())),
+                "One free item of capacity cannot partially purchase a two-item lot");
         shopper.getInventory().clearContent();
         h.assertTrue(NpcMerchants.offer(seller, npc, 2, 11, 8) == Result.SUCCESS
                 && NpcMerchants.trade(shopper, npc, initial, true) == Result.STALE, "Edited terms invalidate an open quote");
@@ -214,23 +220,255 @@ public final class NpcIntegrationTests implements FabricGameTest {
         h.assertTrue(Npcs.canManage(citizen, npc) && !Npcs.canManageStock(citizen, npc),
                 "Market management alone cannot spend city funds or stock; nearby=" + Npcs.nearby(citizen, npc)
                         + ", tracked=" + (level.getEntity(npc.getUUID()) == npc));
+        credit(h, owner, 100);
+        h.assertTrue(dev.regnum.economy.market.MerchantPersistenceTests.fundCity(owner, city.id(), 100)
+                && NpcMerchants.transferFunds(owner, npc, 30, true) == Result.SUCCESS
+                && CoinBalances.get(owner) == 0
+                && dev.regnum.economy.market.MerchantPersistenceTests.cityFunds(owner, city.id()) == 70,
+                "City escrow uses its bound treasury, without crediting the operator wallet");
+        int[] edits = {0};
+        UUID editToken = NpcInteractions.issue(owner, npc, true, 0,
+                List.of(new NpcInteractions.Choice(Component.empty(), ignored -> edits[0]++)));
         h.assertTrue(api.setRolePermissions(owner, ref, "CITIZEN", Set.of()).valid()
                         && api.transferCity(owner, city.id(), citizen.getUUID()).valid()
                         && Npcs.canManageStock(citizen, npc) && !Npcs.canManage(owner, npc),
                 "The new city owner gets current authority and the previous owner loses it");
-        h.assertTrue(NpcMerchants.transferFunds(citizen, npc, 1, true) == Result.FUNDS,
-                "An unfunded city treasury cannot fund NPC stock");
+        NpcInteractions.select(owner, new NpcPackets.Select(editToken, 0, ""));
+        h.assertTrue(edits[0] == 0, "A previously issued editing token cannot retain revoked city authority");
+        h.assertTrue(NpcMerchants.transferFunds(owner, npc, 1, false) == Result.PERMISSION
+                && NpcMerchants.transferFunds(citizen, npc, 71, true) == Result.FUNDS
+                && NpcMerchants.transferFunds(citizen, npc, 10, false) == Result.SUCCESS
+                && CoinBalances.get(citizen) == 0 && NpcMerchants.catalog(citizen, npc).funds() == 20
+                && dev.regnum.economy.market.MerchantPersistenceTests.cityFunds(citizen, city.id()) == 80
+                && Npcs.city(citizen, npc).owner().equals(citizen.getUUID()),
+                "Current city authority and live official information reflect ownership, and escrow returns to its treasury");
         npc.setPos(npc.position().add(32, 0, 0));
         citizen.setPos(npc.position().add(2, 0, 0));
         h.assertTrue(!Npcs.inOriginalTerritory(citizen, npc) && !Npcs.canInteract(citizen, npc) && !Npcs.canManage(citizen, npc),
                 "A city NPC outside its original claim is inactive");
         npc.discard();
+        h.assertTrue(NpcMerchants.settle(owner, npc.getUUID()) == Result.PERMISSION
+                && NpcMerchants.settle(citizen, npc.getUUID()) == Result.SUCCESS
+                && dev.regnum.economy.market.MerchantPersistenceTests.cityFunds(citizen, city.id()) == 100
+                && CoinBalances.get(citizen) == 0, "The new owner can recover missing city escrow only into the original city account");
         h.succeed();
     }
 
     private static Vec3 aboveTest(GameTestHelper h) {
         var origin = h.absolutePos(BlockPos.ZERO);
         return new Vec3(origin.getX() + 0.5, 64, origin.getZ() + 0.5);
+    }
+
+    @GameTest(template = EMPTY_STRUCTURE, batch = "npc_integration")
+    public void bulkStockAndNonstandardStackLimitsConserveEveryItem(GameTestHelper h) {
+        var seller = TestPlayers.create(h);
+        var npc = placeMerchant(h, seller, aboveTest(h), null);
+        for (var sample : List.of(new ItemStack(Items.STONE), new ItemStack(Items.SNOWBALL), new ItemStack(Items.IRON_SWORD))) {
+            seller.getInventory().clearContent();
+            int stackSize = sample.getMaxStackSize();
+            int total = 36 * stackSize;
+            for (int i = 0; i < 36; i++) seller.getInventory().setItem(i, sample.copyWithCount(stackSize));
+            h.assertTrue(NpcMerchants.offer(seller, npc, 2, 1, 1) == Result.SUCCESS, "Configure each stack limit");
+            h.assertTrue(NpcMerchants.transferStock(seller, npc, 1, total, true) == Result.SUCCESS
+                    && seller.getInventory().countItem(sample.getItem()) == 0, "Deposit all " + total + " items");
+            seller.getInventory().setItem(35, new ItemStack(Items.DIAMOND, 64));
+            var before = seller.getInventory().save(new net.minecraft.nbt.ListTag());
+            h.assertTrue(NpcMerchants.transferStock(seller, npc, 1, total, false) == Result.SPACE
+                    && before.equals(seller.getInventory().save(new net.minecraft.nbt.ListTag()))
+                    && quote(seller, npc).stock() == total, "Partial capacity rejects the entire transfer");
+            h.assertTrue(NpcMerchants.settle(seller, npc.getUUID()) == Result.SPACE
+                    && quote(seller, npc).stock() == total, "Partial settlement retains escrow");
+            seller.getInventory().clearContent();
+            h.assertTrue(NpcMerchants.transferStock(seller, npc, 1, total, false) == Result.SUCCESS
+                    && seller.getInventory().countItem(sample.getItem()) == total
+                    && seller.getInventory().items.stream().allMatch(stack -> stack.getCount() == stackSize),
+                    "Collect fills legal stacks without truncation at stack limit " + stackSize);
+            h.assertTrue(NpcMerchants.transferStock(seller, npc, 1, 1, false) == Result.STOCK,
+                    "Repeated collection cannot duplicate stock");
+            h.assertTrue(NpcMerchants.removeOffer(seller, npc, 1) == Result.SUCCESS, "Empty offer can be removed");
+        }
+        npc.discard();
+        h.succeed();
+    }
+
+    @GameTest(template = EMPTY_STRUCTURE, batch = "npc_integration")
+    public void cursorItemsAndOtherMenusCannotBeCheckpointedByNpcOperations(GameTestHelper h) {
+        var seller = TestPlayers.create(h);
+        var npc = placeMerchant(h, seller, aboveTest(h), null);
+        seller.getInventory().setItem(0, new ItemStack(Items.STONE, 4));
+        credit(h, seller, 20);
+        h.assertTrue(NpcMerchants.offer(seller, npc, 2, 1, 1) == Result.SUCCESS
+                && NpcMerchants.transferStock(seller, npc, 1, 4, true) == Result.SUCCESS
+                && NpcMerchants.transferFunds(seller, npc, 10, true) == Result.SUCCESS, "Prepare funded escrow");
+        var current = quote(seller, npc);
+        seller.inventoryMenu.setCarried(new ItemStack(Items.DIAMOND, 3));
+        h.assertTrue(NpcMerchants.trade(seller, npc, current, true) == Result.UNAVAILABLE
+                && NpcMerchants.transferStock(seller, npc, 1, 1, false) == Result.UNAVAILABLE
+                && NpcMerchants.transferFunds(seller, npc, 1, false) == Result.UNAVAILABLE
+                && NpcMerchants.settle(seller, npc.getUUID()) == Result.UNAVAILABLE
+                && CoinBalances.get(seller) == 10 && quote(seller, npc).stock() == 4
+                && seller.inventoryMenu.getCarried().getCount() == 3, "A nonpersistent cursor blocks every NPC checkpoint");
+        seller.inventoryMenu.setCarried(ItemStack.EMPTY);
+        seller.inventoryMenu.getCraftSlots().setItem(0, new ItemStack(Items.DIAMOND, 3));
+        var checkpoint = new ServerPlayer(seller.server, h.getLevel(), seller.getGameProfile(),
+                net.minecraft.server.level.ClientInformation.createDefault());
+        TestPlayers.connect(checkpoint);
+        checkpoint.load(seller.saveWithoutId(new CompoundTag()));
+        h.assertTrue(checkpoint.inventoryMenu.getCraftSlots().isEmpty() && checkpoint.getInventory().countItem(Items.DIAMOND) == 0,
+                "Vanilla player NBT omits inventory-crafting items");
+        h.assertTrue(NpcMerchants.trade(seller, npc, current, true) == Result.UNAVAILABLE
+                && NpcMerchants.settle(seller, npc.getUUID()) == Result.UNAVAILABLE
+                && seller.inventoryMenu.getCraftSlots().getItem(0).getCount() == 3
+                && CoinBalances.get(seller) == 10 && quote(seller, npc).stock() == 4,
+                "NPC commits cannot checkpoint an inventory with transient crafting items");
+        seller.inventoryMenu.getCraftSlots().clearContent();
+        seller.containerMenu = dev.regnum.economy.money.WalletMenu.type().create(7, seller.getInventory());
+        h.assertTrue(NpcMerchants.settle(seller, npc.getUUID()) == Result.UNAVAILABLE, "Another open menu blocks settlement");
+        seller.containerMenu = seller.inventoryMenu;
+        h.assertTrue(NpcMerchants.settle(seller, npc.getUUID()) == Result.SUCCESS
+                && CoinBalances.get(seller) == 20 && seller.getInventory().countItem(Items.STONE) == 4, "Closing menus allows exact settlement");
+        npc.discard();
+        h.succeed();
+    }
+
+    @GameTest(template = EMPTY_STRUCTURE, batch = "npc_integration")
+    public void staleSessionsAndDisconnectedPlayersCannotTrade(GameTestHelper h) {
+        var owner = TestPlayers.create(h);
+        var npc = placeMerchant(h, owner, aboveTest(h), null);
+        int[] calls = {0};
+        var choices = List.of(new NpcInteractions.Choice(Component.empty(), ignored -> calls[0]++));
+        var token = NpcInteractions.issue(owner, npc, false, 0, choices);
+        var ticket = new NpcInteractions.Ticket(token, 1000, 1, 0);
+        h.assertTrue(ticket.accepts(new NpcPackets.Select(token, 0, ""), 60_999)
+                && !ticket.accepts(new NpcPackets.Select(token, 0, ""), 61_000)
+                && !ticket.accepts(new NpcPackets.Select(token, -1, ""), 1001)
+                && !ticket.accepts(new NpcPackets.Select(token, 0, "\n"), 1001), "Expiry, indices and control characters are validated");
+        var replaced = NpcInteractions.issue(owner, npc, false, 0, choices);
+        NpcInteractions.select(owner, new NpcPackets.Select(token, 0, ""));
+        NpcInteractions.select(owner, new NpcPackets.Select(replaced, 0, ""));
+        NpcInteractions.select(owner, new NpcPackets.Select(replaced, 0, ""));
+        h.assertTrue(calls[0] == 1, "A replacement invalidates the older dialogue and each page is consumed once");
+        var stale = NpcInteractions.issue(owner, npc, false, 0, choices);
+        npc.discard();
+        NpcInteractions.select(owner, new NpcPackets.Select(stale, 0, ""));
+        h.assertTrue(calls[0] == 1, "A missing or unloaded entity cannot execute a pending action");
+        var live = placeMerchant(h, owner, aboveTest(h), null);
+        owner.getInventory().setItem(0, new ItemStack(Items.STONE, 2));
+        h.assertTrue(NpcMerchants.offer(owner, live, 1, 1, 1) == Result.SUCCESS
+                && NpcMerchants.transferStock(owner, live, 1, 2, true) == Result.SUCCESS, "Prepare disconnect fixture");
+        var pending = NpcInteractions.issue(owner, live, false, 0, choices);
+        owner.disconnect();
+        h.assertTrue(owner.hasDisconnected() && !Npcs.canAct(owner), "Disconnect rejects the player before PlayerList removal");
+        NpcInteractions.select(owner, new NpcPackets.Select(pending, 0, ""));
+        h.assertTrue(calls[0] == 1 && NpcMerchants.settle(owner, live.getUUID()) == Result.PERMISSION
+                && NpcMerchants.transferStock(owner, live, 1, 1, false) == Result.PERMISSION
+                && quote(owner, live).stock() == 2, "Pending packets and commands cannot change escrow after disconnect");
+        live.discard();
+        h.succeed();
+    }
+
+    @GameTest(template = EMPTY_STRUCTURE, batch = "npc_integration")
+    public void journalWriteFailureRollsBackInventoryWalletAndStock(GameTestHelper h) throws Exception {
+        var owner = TestPlayers.create(h);
+        var npc = placeMerchant(h, owner, aboveTest(h), null);
+        owner.getInventory().setItem(0, new ItemStack(Items.STONE, 4));
+        credit(h, owner, 100);
+        h.assertTrue(NpcMerchants.offer(owner, npc, 2, 10, 8) == Result.SUCCESS
+                && NpcMerchants.transferStock(owner, npc, 1, 4, true) == Result.SUCCESS, "Prepare journal failure fixture");
+        var root = owner.server.getWorldPath(LevelResource.ROOT);
+        var directory = root.resolve("data");
+        var backup = root.resolve("data-journal-failure-fixture");
+        var before = java.nio.file.Files.readAllBytes(directory.resolve("regnum_economy_markets.dat"));
+        var inventory = owner.getInventory().save(new net.minecraft.nbt.ListTag());
+        java.nio.file.Files.move(directory, backup);
+        try {
+            // A real filesystem error in writeAtomic, before the journal commit point.
+            java.nio.file.Files.createFile(directory);
+            h.assertTrue(NpcMerchants.trade(owner, npc, quote(owner, npc), true) == Result.SAVE_FAILED,
+                    "A journal write failure is reported as an unsuccessful trade");
+        } finally {
+            java.nio.file.Files.deleteIfExists(directory);
+            java.nio.file.Files.move(backup, directory);
+        }
+        h.assertTrue(CoinBalances.get(owner) == 100 && quote(owner, npc).stock() == 4
+                && NpcMerchants.catalog(owner, npc).funds() == 0
+                && inventory.equals(owner.getInventory().save(new net.minecraft.nbt.ListTag()))
+                && java.util.Arrays.equals(before, java.nio.file.Files.readAllBytes(directory.resolve("regnum_economy_markets.dat")))
+                && WalletPersistence.available(owner.server), "The failed commit restores every live and durable participant");
+        h.assertTrue(NpcMerchants.trade(owner, npc, quote(owner, npc), true) == Result.SUCCESS
+                && CoinBalances.get(owner) == 90 && quote(owner, npc).stock() == 2,
+                "A fresh retry after rollback can commit exactly once");
+        npc.discard();
+        h.succeed();
+    }
+
+    @GameTest(template = EMPTY_STRUCTURE, batch = "npc_integration")
+    public void npcPacketCodecsPreserveTermsAndRejectOversizedInput(GameTestHelper h) {
+        var buffer = new net.minecraft.network.RegistryFriendlyByteBuf(io.netty.buffer.Unpooled.buffer(), h.getLevel().registryAccess());
+        try {
+            UUID token = UUID.randomUUID();
+            var request = new NpcPackets.Select(token, 1, "A valid greeting");
+            NpcPackets.Select.CODEC.encode(buffer, request);
+            h.assertTrue(NpcPackets.Select.CODEC.decode(buffer).equals(request), "Client selection retains its token, index and input");
+            buffer.clear();
+            var page = new NpcPackets.Page(token, Component.literal("Merchant"), NpcRole.MERCHANT.label(),
+                    Npcs.text("merchant.confirm_buy", 2, Component.literal("Stone"), "10"), new ItemStack(Items.STONE, 2),
+                    List.of(Npcs.text("cancel"), Npcs.text("confirm")), 0, Component.empty(), "");
+            NpcPackets.Page.CODEC.encode(buffer, page);
+            var decoded = NpcPackets.Page.CODEC.decode(buffer);
+            h.assertTrue(decoded.token().equals(token), "Server page retains its token");
+            h.assertTrue(decoded.choices().equals(page.choices()), "Server page retains its action labels");
+            h.assertTrue(ItemStack.matches(decoded.item(), page.item()), "Server page retains its exact item lot");
+            // Vanilla canonicalizes numeric translation arguments to strings on the
+            // wire. Compare their complete serialized meaning, not Java arg types.
+            h.assertTrue(Component.Serializer.toJson(decoded.body(), h.getLevel().registryAccess())
+                    .equals(Component.Serializer.toJson(page.body(), h.getLevel().registryAccess())),
+                    "Server page retains the complete translated confirmation terms");
+            buffer.clear();
+            buffer.writeUUID(token);
+            buffer.writeVarInt(0);
+            buffer.writeUtf("x".repeat(RegnumNpc.DIALOGUE_LIMIT + 1));
+            boolean rejected = false;
+            try { NpcPackets.Select.CODEC.decode(buffer); }
+            catch (io.netty.handler.codec.DecoderException expected) { rejected = true; }
+            h.assertTrue(rejected, "Oversized client text is rejected by the packet decoder");
+        } finally {
+            buffer.release();
+        }
+        h.succeed();
+    }
+
+    @GameTest(template = EMPTY_STRUCTURE, batch = "npc_integration")
+    public void allFiveRolesSupportCreationConfigurationActivationAndRemoval(GameTestHelper h) throws Exception {
+        var owner = TestPlayers.create(h);
+        var visitor = TestPlayers.create(h);
+        var position = aboveTest(h);
+        owner.setPos(position);
+        visitor.setPos(position.add(2, 0, 0));
+        var players = owner.server.getPlayerList();
+        players.getOps().add(new net.minecraft.server.players.ServerOpListEntry(owner.getGameProfile(), 2, false));
+        try {
+            for (var role : new NpcRole[]{NpcRole.MERCHANT, NpcRole.BANKER, NpcRole.OFFICIAL, NpcRole.GUARD, NpcRole.GENERIC}) {
+                var npc = Npcs.create(owner, role, "Role fixture");
+                h.assertTrue(npc != null && npc.role() == role && npc.appearance() == role.appearance()
+                        && Npcs.canInteract(visitor, npc), "Create each built-in role with its intended appearance");
+                npc.setCustomName(Component.literal("Edited name"));
+                npc.roleTitle("Edited role");
+                npc.greeting("Edited greeting");
+                npc.details("Edited details");
+                npc.active(false);
+                h.assertTrue(!Npcs.canInteract(visitor, npc) && Npcs.canManage(owner, npc)
+                        && !Npcs.canManage(visitor, npc), "Only the authorized owner can manage an inactive role");
+                npc.active(true);
+                h.assertTrue(Npcs.canInteract(visitor, npc) && npc.getName().getString().equals("Edited name")
+                        && npc.roleLabel().getString().equals("Edited role"), "Activation preserves edited configuration");
+                h.assertTrue(owner.server.getCommands().getDispatcher().execute("economy npc remove " + npc.getStringUUID(),
+                        owner.createCommandSourceStack()) == 1 && !npc.isAlive(), "The authorized removal command works for every role");
+            }
+        } finally {
+            players.deop(owner.getGameProfile());
+        }
+        h.succeed();
     }
 
     private static RegnumNpc placeMerchant(GameTestHelper h, ServerPlayer seller, Vec3 position, UUID city) {

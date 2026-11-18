@@ -226,6 +226,11 @@ public final class NpcMerchants {
 
     private static Result commit(MarketData data, ServerPlayer player, Supplier<Result> transaction) {
         if (!data.available()) return Result.UNAVAILABLE;
+        // Cursor and inventory-crafting items are not included in vanilla player
+        // NBT. Do not checkpoint an inventory from which they have been removed.
+        if (!Npcs.canAct(player) || player.containerMenu != player.inventoryMenu
+                || !player.containerMenu.getCarried().isEmpty()
+                || !player.inventoryMenu.getCraftSlots().isEmpty()) return Result.UNAVAILABLE;
         Result[] result = {Result.SAVE_FAILED};
         int committed = data.transaction(player, () -> {
             result[0] = transaction.get();

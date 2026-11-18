@@ -30,7 +30,7 @@ public final class Npcs {
     }
 
     public static boolean canAct(ServerPlayer player) {
-        return player.isAlive() && !player.isSpectator() && AuthAccess.permits(player)
+        return player.isAlive() && !player.isSpectator() && !player.hasDisconnected() && AuthAccess.permits(player)
                 && player.server.getPlayerList().getPlayer(player.getUUID()) == player;
     }
 

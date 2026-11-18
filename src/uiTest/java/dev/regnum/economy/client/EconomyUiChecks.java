@@ -41,7 +41,7 @@ public final class EconomyUiChecks implements ClientModInitializer {
                     try (var pixels=net.minecraft.client.Screenshot.takeScreenshot(mc.getMainRenderTarget())) {
                         pixels.writeToFile(Path.of("checks/captures/phase-c-"+stage+".png"));
                     }
-                    if (stage==5) mc.stop();
+                    if (stage==6) mc.stop();
                     else { stage++; captureTicks=0; showCapture(mc,stage); }
                     return;
                 }
@@ -61,6 +61,10 @@ public final class EconomyUiChecks implements ClientModInitializer {
         });
     }
     private void checkLocale(Minecraft mc) throws Exception {
+        for (var denomination : Denomination.values()) {
+            var model = mc.getItemRenderer().getModel(new ItemStack(denomination.item()), null, null, 0);
+            require(model != mc.getModelManager().getMissingModel(), "Every coin resolves to a baked Minecraft item model");
+        }
         for (int[] size:List.of(new int[]{320,240},new int[]{640,360},new int[]{1100,760})) {
             checkNpc(mc,size);
             Inventory inventory=new Inventory(null);
@@ -107,6 +111,14 @@ public final class EconomyUiChecks implements ClientModInitializer {
         }
     }
     private void checkNpc(Minecraft mc, int[] size) throws Exception {
+        for (String role : List.of("merchant", "banker", "official", "guard", "generic")) {
+            var page = new NpcPackets.Page(ID, Component.literal("Persistent " + role), npcText("role." + role),
+                    npcText(role.equals("banker") ? "bank.info" : role.equals("official") ? "city.info" : "greeting",
+                            "100", "Owner", "Kingdom"), ItemStack.EMPTY,
+                    List.of(npcText("more"), npcText("back")), 0, Component.empty(), "");
+            check(mc, new NpcScreen(page), size);
+            require(!page.role().getString().startsWith("npc.regnum-economy."), "Every role is localized");
+        }
         var merchant = new NpcScreen(npcPage("merchant.quote", new ItemStack(Items.BREAD, 12),
                 List.of("review_buy", "review_sell", "previous", "next", "back"), 0));
         check(mc, merchant, size);
@@ -162,10 +174,14 @@ public final class EconomyUiChecks implements ClientModInitializer {
     private void showCapture(Minecraft mc,int stage) throws Exception {
         Inventory inventory=new Inventory(null);
         Screen screen;
-        if (stage==2) {
+        if (stage==2 || stage==6) {
             var c=WalletMenu.class.getDeclaredConstructor(int.class,Inventory.class); c.setAccessible(true);
             var menu=c.newInstance(1,inventory); menu.setState(new WalletPackets.State(1,ID,4,0,12345,-1));
             inventory.setItem(0,new net.minecraft.world.item.ItemStack(Denomination.GOLD.item(),3));
+            if (stage==6) {
+                inventory.setItem(1,new ItemStack(Denomination.SILVER.item(),3));
+                inventory.setItem(2,new ItemStack(Denomination.COPPER.item(),3));
+            }
             screen=new WalletScreen(menu,inventory,Component.translatable("container.regnum-economy.wallet"));
         } else if (stage==3) {
             var c=TradeMenu.class.getDeclaredConstructor(int.class,Inventory.class); c.setAccessible(true);

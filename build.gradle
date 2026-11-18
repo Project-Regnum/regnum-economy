@@ -172,5 +172,34 @@ fabricApi {
 tasks.register('resetGameTestWorld', Delete) { delete layout.buildDirectory.dir('run/gameTest/world') }
 tasks.named('runGameTest', JavaExec) {
     dependsOn tasks.named('resetGameTestWorld')
-    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(25) }
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(21) }
+}
+
+// Opt-in recovery probe: use a separate disposable world across JVM restarts.
+// The interrupt phase intentionally exits with code 86 after a real file-install failure.
+def recoveryProbe = providers.gradleProperty('recovery_probe').orElse('').get()
+if (!(recoveryProbe in ['', 'interrupt', 'verify'])) throw new GradleException('Unknown recovery_probe phase')
+tasks.named('processGametestResources') {
+    inputs.property 'recovery_probe', recoveryProbe
+    filesMatching('fabric.mod.json') {
+        expand gametest_entrypoints: groovy.json.JsonOutput.toJson(recoveryProbe
+                ? ['dev.regnum.economy.npc.NpcRecoveryProbe']
+                : ['dev.regnum.economy.money.EconomyIntegrationTests', 'dev.regnum.economy.trade.EscrowIntegrationTests',
+                   'dev.regnum.economy.npc.NpcIntegrationTests', 'dev.regnum.economy.market.MerchantPersistenceTests'])
+    }
+}
+if (recoveryProbe) {
+    loom.runs.gameTest {
+        runDir 'build/run/recoveryProbe'
+        vmArg "-DregnumEconomy.recoveryProbe=${recoveryProbe}"
+    }
+    tasks.named('resetGameTestWorld') { enabled = false }
+    tasks.register('resetRecoveryProbeWorld', Delete) {
+        delete layout.buildDirectory.dir('run/recoveryProbe/world')
+        onlyIf { recoveryProbe == 'interrupt' }
+    }
+    tasks.named('runGameTest') { dependsOn tasks.named('resetRecoveryProbeWorld') }
+}
+tasks.named('runUiTest', JavaExec) {
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(21) }
 }

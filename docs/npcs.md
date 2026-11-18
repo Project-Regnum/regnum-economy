@@ -48,6 +48,12 @@ Entity UUID and position use vanilla serialization. The version-1 `RegnumNpc` en
 
 Set Gradle to JDK 25 and provide a Java 21 toolchain. Use the approved Nations artifact described in the [Economy README](../README.md). On Windows, run `.\gradlew.bat test build runUiTest --console=plain`. The server GameTests and client layout checks use separate directories under `build/run`.
 
+NPC transactions require the normal inventory menu with an empty cursor and crafting grid. Close other containers and return any cursor-held or crafting-grid items before transferring stock, funds or settling escrow. Disconnected player instances cannot perform NPC actions.
+
+For the opt-in process interruption test, run `runGameTest -Precovery_probe=interrupt`, followed by `runGameTest -Precovery_probe=verify` twice in separate Gradle invocations. The interrupt phase intentionally exits its test JVM with code 86 after a real market-file installation failure; Gradle reports that expected interruption as a failed task. Both verification invocations must succeed. This uses only `build/run/recoveryProbe/world`; starting another interrupt phase resets that disposable world. The normal `build` uses the separate, freshly reset `build/run/gameTest/world`.
+
+The probe checks journal recovery after the player file has been installed but the market file has not, exact wallet/items/escrow after restart, repeated startup and persistence of all five roles. It does not establish safety against power loss or every possible filesystem failure. Live multiplayer and integrated-host behavior still require separate testing. See [stabilization evidence](npc-stabilization.md).
+
 To exercise a live trade in the development client, run `.\gradlew.bat runClient` and create a new creative test world with commands enabled. Find open wilderness and stand where the merchant should go.
 
 ```text
