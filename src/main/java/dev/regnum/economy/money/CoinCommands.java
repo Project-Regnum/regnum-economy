@@ -19,8 +19,8 @@ public final class CoinCommands {
             dispatcher.register(literal("wallet").executes(context ->
                     WalletMenu.open(context.getSource().getPlayerOrException()) ? 1 : 0));
 
-            dispatcher.register(literal("economy").requires(source -> source.hasPermission(2))
-                    .then(literal("grant")
+            dispatcher.register(literal("economy")
+                    .then(literal("grant").requires(source -> source.hasPermission(2))
                             .then(argument("player", EntityArgument.player())
                                     .then(argument("amount", LongArgumentType.longArg(1))
                                             .executes(context -> grant(context.getSource(),

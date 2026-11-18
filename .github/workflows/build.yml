@@ -19,10 +19,12 @@ jobs:
           path: regnum-economy
       - name: validate gradle wrapper
         uses: gradle/actions/wrapper-validation@v6
-      - name: setup jdk
+      - name: setup build and Minecraft jdks
         uses: actions/setup-java@v5
         with:
-          java-version: '25'
+          java-version: |
+            21
+            25
           distribution: 'microsoft'
       - name: read Nations source lock
         id: nations

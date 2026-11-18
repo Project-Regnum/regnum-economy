@@ -7,6 +7,7 @@ import dev.regnum.economy.money.CoinCommands;
 import dev.regnum.economy.money.Denomination;
 import dev.regnum.economy.money.WalletMenu;
 import dev.regnum.economy.trade.Trades;
+import dev.regnum.economy.npc.Npcs;
 import net.fabricmc.api.ModInitializer;
 import net.minecraft.resources.ResourceLocation;
 
@@ -23,6 +24,7 @@ public class RegnumEconomy implements ModInitializer {
         CoinCommands.register();
         Trades.register();
         Markets.register();
+        Npcs.register();
     }
 
     public static ResourceLocation id(String path) {
