@@ -45,12 +45,20 @@ public final class InventoryPlan {
     public boolean remove(ItemStack sample, int count) {
         for (int i = 0; i < slots.size() && count > 0; i++) {
             ItemStack stack = slots.get(i);
-            if (stack.isEmpty() || !ItemStack.isSameItemSameComponents(sample, stack)) continue;
+            if (!matches(sample, stack)) continue;
             int moved = Math.min(count, stack.getCount());
             count -= moved;
             stack.shrink(moved);
         }
         return count == 0;
+    }
+
+    public static int countMatching(Inventory inventory, ItemStack sample) {
+        return inventory.items.stream().filter(stack -> matches(sample, stack)).mapToInt(ItemStack::getCount).sum();
+    }
+
+    private static boolean matches(ItemStack sample, ItemStack stack) {
+        return !stack.isEmpty() && ItemStack.isSameItemSameComponents(sample, stack);
     }
 
     public void apply() {

@@ -24,7 +24,7 @@ public final class NpcMerchants {
     private NpcMerchants() { }
 
     public enum Result {
-        SUCCESS, UNAVAILABLE, STALE, INVALID, PERMISSION, STOCK, ITEM, SPACE, FUNDS, MERCHANT_FUNDS, LIMIT, SAVE_FAILED;
+        SUCCESS, UNAVAILABLE, STALE, INVALID, PERMISSION, STOCK, STOCK_FULL, ITEM, SPACE, FUNDS, MERCHANT_FUNDS, LIMIT, SAVE_FAILED;
 
         public Component message() {
             return Npcs.text("result." + name().toLowerCase(Locale.ROOT));
@@ -37,8 +37,8 @@ public final class NpcMerchants {
             return new Quote(good.id, good.sample.copy(), good.quantity, good.ask, good.bid, good.stock);
         }
 
-        boolean matches(MerchantStock.Good good, boolean purchase) {
-            return quantity == good.quantity && price(purchase) == (purchase ? good.ask : good.bid)
+        boolean matches(MerchantStock.Good good) {
+            return quantity == good.quantity && ask == good.ask && bid == good.bid
                     && ItemStack.isSameItemSameComponents(item, good.sample);
         }
 
@@ -64,26 +64,18 @@ public final class NpcMerchants {
     /** Called with a server-created quote held by the current interaction session. */
     public static Result trade(ServerPlayer player, RegnumNpc npc, Quote quote, boolean purchase) {
         if (!isMerchant(npc) || !Npcs.canInteract(player, npc)) return Result.UNAVAILABLE;
+        if (purchase && npc.role().feature() == NpcRole.Feature.BUYER) return Result.STALE;
         MarketData data = MarketData.get(player.server);
         MerchantStock merchant = data.merchants.get(npc.getUUID());
         if (!data.available() || !matches(npc, merchant)) return Result.UNAVAILABLE;
         if (merchant == null || quote.price(purchase) <= 0) return Result.STALE;
         var good = merchant.goods.stream().filter(entry -> entry.id.equals(quote.id())).findFirst().orElse(null);
-        if (good == null || !quote.matches(good, purchase)) return Result.STALE;
+        if (good == null || !quote.matches(good)) return Result.STALE;
         long price = quote.price(purchase);
         int amount = good.quantity;
         InventoryPlan inventory = new InventoryPlan(player.getInventory());
-        if (purchase) {
-            if (amount > good.stock) return Result.STOCK;
-            if (price > CoinBalances.get(player)) return Result.FUNDS;
-            if (price > Long.MAX_VALUE - merchant.coins) return Result.LIMIT;
-            if (!inventory.add(good.sample.copyWithCount(amount)).isEmpty()) return Result.SPACE;
-        } else {
-            if (amount > STOCK_LIMIT - good.stock) return Result.STOCK;
-            if (price > merchant.coins) return Result.MERCHANT_FUNDS;
-            if (price > Long.MAX_VALUE - CoinBalances.get(player)) return Result.LIMIT;
-            if (!inventory.remove(good.sample, amount)) return Result.ITEM;
-        }
+        Result readiness = prepare(inventory, Quote.of(good), CoinBalances.get(player), merchant.coins, purchase);
+        if (readiness != Result.SUCCESS) return readiness;
         return commit(data, player, () -> {
             boolean transferred = purchase ? CoinBalances.debit(player, price) : CoinBalances.credit(player, price);
             if (!transferred) return Result.FUNDS;
@@ -94,11 +86,32 @@ public final class NpcMerchants {
         });
     }
 
+    /** Read-only preview using the same inventory and balance checks as settlement. */
+    public static Result preview(ServerPlayer player, Quote quote, long merchantFunds, boolean purchase) {
+        return prepare(new InventoryPlan(player.getInventory()), quote, CoinBalances.get(player), merchantFunds, purchase);
+    }
+
+    private static Result prepare(InventoryPlan inventory, Quote quote, long wallet, long merchantFunds, boolean purchase) {
+        long price = quote.price(purchase);
+        if (price <= 0) return Result.STALE;
+        if (purchase) {
+            if (quote.quantity() > quote.stock()) return Result.STOCK;
+            if (price > wallet) return Result.FUNDS;
+            if (price > Long.MAX_VALUE - merchantFunds) return Result.LIMIT;
+            return inventory.add(quote.item().copyWithCount(quote.quantity())).isEmpty() ? Result.SUCCESS : Result.SPACE;
+        }
+        if (quote.quantity() > STOCK_LIMIT - quote.stock()) return Result.STOCK_FULL;
+        if (price > merchantFunds) return Result.MERCHANT_FUNDS;
+        if (price > Long.MAX_VALUE - wallet) return Result.LIMIT;
+        return inventory.remove(quote.item(), quote.quantity()) ? Result.SUCCESS : Result.ITEM;
+    }
+
     public static Result offer(ServerPlayer player, RegnumNpc npc, int quantity, long ask, long bid) {
         if (!isMerchant(npc) || !Npcs.canManageStock(player, npc) || !Npcs.inOriginalTerritory(player, npc)) {
             return Result.PERMISSION;
         }
-        if (!validTerms(quantity, ask, bid) || player.getMainHandItem().isEmpty()) return Result.INVALID;
+        if (!validTerms(quantity, ask, bid) || player.getMainHandItem().isEmpty()
+                || npc.role().feature() == NpcRole.Feature.BUYER && ask != 0) return Result.INVALID;
         ItemStack sample = player.getMainHandItem().copyWithCount(1);
         MarketData data = MarketData.get(player.server);
         if (!matches(npc, data.merchants.get(npc.getUUID()))) return Result.UNAVAILABLE;
@@ -240,7 +253,7 @@ public final class NpcMerchants {
     }
 
     private static boolean isMerchant(RegnumNpc npc) {
-        return npc.role().feature() == NpcRole.Feature.MERCHANT;
+        return npc.role().usesMerchantStock();
     }
 
     private static boolean matches(RegnumNpc npc, MerchantStock merchant) {

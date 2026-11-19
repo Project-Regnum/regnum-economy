@@ -5,15 +5,16 @@ NPCs ship with Regnum Economy for Fabric 1.21.1 and use the locked Regnum Nation
 ## Roles
 
 - **Merchant** opens a catalogue with real stock, copper prices, wallet balance and a separate trade confirmation.
+- **Buyer** opens its catalogue on right-click. It pays bids from escrow and takes matching items into stock.
 - **Banker** shows your current balance and denominations and opens Regnum's existing coin exchange for deposits and withdrawals.
 - **Civil official** can report the current city, owner and kingdom in a Nations claim.
-- **Sentinel** and **resident** support the same branching dialogue and city context as the other roles. All five roles are stationary.
+- **Sentinel** and **resident** support the same branching dialogue and city context as the other roles. All six roles are stationary.
 
 Right-click within six blocks with a clear line of sight. The greeting branches into a second dialogue page, role actions and city information when available. Use **Back** to return to the greeting or **Close** to leave. Default dialogue and controls are available in English and Ukrainian.
 
 ## Administration
 
-Use `/economy npc create <role> <name>` at the position where the NPC should stand. The built-in role IDs are `regnum-economy:merchant`, `regnum-economy:banker`, `regnum-economy:official`, `regnum-economy:guard` and `regnum-economy:generic`. Creation prints a clickable UUID. Other nearby NPC commands offer UUID completions.
+Use `/economy npc create <role> <name>` at the position where the NPC should stand. The built-in role IDs are `regnum-economy:merchant`, `regnum-economy:buyer`, `regnum-economy:banker`, `regnum-economy:official`, `regnum-economy:guard` and `regnum-economy:generic`. Creation prints a clickable UUID. Other nearby NPC commands offer UUID completions.
 
 | Command | Effect |
 | --- | --- |
@@ -43,6 +44,26 @@ Wilderness merchants use the proprietor's virtual wallet as the funding and sett
 The server issues one-use page tokens tied to the player and loaded entity. It checks current distance, claim, authorization and exact offer terms again before a transfer. If a confirmation response times out, reopen the conversation to check the authoritative inventory, wallet and stock before retrying.
 
 Entity UUID and position use vanilla serialization. The version-1 `RegnumNpc` entity tag holds affiliation, role, appearance, active state and text. Unsupported definitions remain inactive and retain their original data. Merchant offers and escrow share `data/regnum_economy_markets.dat` and the existing wallet transaction journal. Version 3 reads versions 1 and 2 with an empty NPC catalogue on migration. Keep the full world together when restoring a backup. If an NPC was deleted through vanilla administration or lost before an entity save, use its UUID to settle any durable escrow.
+
+## Buyer setup in a disposable world
+
+Create a fresh world with commands enabled. As an operator in unclaimed wilderness, stand where the buyer should go and run these commands. Replace `<operator>` with your player name and `<npc>` with the UUID printed when the NPC is created. Hold plain wheat in your main hand before running `offer`.
+
+```text
+/gamerule regnumEconomyIssuanceEnabled true
+/economy grant <operator> 100
+/give @s minecraft:wheat 4
+/economy npc create regnum-economy:buyer Miller
+/economy npc offer <npc> 2 0 6
+/economy npc funds deposit <npc> 30
+/economy npc info <npc>
+```
+
+The ask column is `0` for buyers. To configure the same offer graphically, hold the wheat, open `/economy npc edit <npc>`, select **Edit held-item offer**, enter `2 0 6`, and select **Save**. The **Talk** button in the buyer's catalogue also leads to **Configure NPC** for authorized users. The funding command draws from the proprietor's wallet in wilderness and the bound city treasury in a claim.
+
+Right-click Miller. Select wheat if necessary, then choose **Sell lot**. The review shows 2 wheat and 6 copper. Choose **Confirm sale**. With the same operator account as the visitor, the inventory should go from 4 to 2 wheat, the wallet from 70 to 76 copper, the listing stock from 0 to 2 wheat, and escrow from 30 to 24 copper. `/wallet` shows the wallet balance and `/economy npc info <npc>` shows stock and escrow.
+
+To exercise server rejection with two players, have the visitor open a sale review. From the operator account, hold the same wheat and run `/economy npc offer <npc> 2 0 7` before the visitor confirms. The visitor should see that the offer changed. Compare the visitor's matching inventory and wallet and the buyer's stock and escrow before and after confirmation. The updated bid appears in the catalogue for a fresh review.
 
 ## Development and verification
 

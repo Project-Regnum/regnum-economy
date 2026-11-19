@@ -91,7 +91,7 @@ final class NpcCommands {
 
     private static int remove(ServerPlayer player, RegnumNpc npc) {
         if (!Npcs.canRemove(player, npc)) return fail(player, "result.permission");
-        if (npc.role().feature() == NpcRole.Feature.MERCHANT) {
+        if (npc.role().usesMerchantStock()) {
             var result = NpcMerchants.clearForRemoval(player, npc);
             if (result != NpcMerchants.Result.SUCCESS) return result(player, result);
         }
@@ -102,7 +102,7 @@ final class NpcCommands {
 
     private static int info(ServerPlayer player, RegnumNpc npc) {
         player.sendSystemMessage(text("info", npc.getName(), npc.roleLabel(), copyId(npc)));
-        if (npc.role().feature() == NpcRole.Feature.MERCHANT && Npcs.canManageStock(player, npc)) {
+        if (npc.role().usesMerchantStock() && Npcs.canManageStock(player, npc)) {
             var catalog = NpcMerchants.catalog(player, npc);
             if (!catalog.available()) return fail(player, "result.unavailable");
             player.sendSystemMessage(text("info.funds", Long.toString(catalog.funds())));

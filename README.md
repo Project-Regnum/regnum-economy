@@ -21,7 +21,7 @@ Trade drops are disabled because spawned world entities cannot participate in an
 
 ## NPCs
 
-Place a persistent merchant, banker, official, sentinel or resident with the in-game NPC commands. Right-click to open its dialogue. Merchants use the existing wallet and recoverable stock escrow. See [NPC setup, permissions and testing](docs/npcs.md).
+Place a persistent merchant, buyer, banker, official, sentinel or resident with the in-game NPC commands. Right-click a buyer to see what it buys. Merchants and buyers use the existing wallet and recoverable stock escrow. See [NPC setup, permissions and testing](docs/npcs.md).
 
 ## City markets
 
@@ -52,7 +52,7 @@ The 0.12.0 common API retains the PR #20 contract (scoped identities, permission
 
 ### Economy UI verification
 
-The coin exchange has separate Deposit and Withdraw modes. Selecting inventory coins never moves them; the deposit preview shows their copper value. Enter in the withdrawal amount field moves focus to the explicit Withdraw button. Treasury transfers show source, destination and amount before confirmation; Cancel is initially focused, and political invalidation clears the review. Trade keeps its server slot positions and shows item offers separately from balance offers.
+The coin exchange has separate Deposit and Withdraw modes. Selecting inventory coins never moves them; the deposit preview shows their copper value. Enter in the withdrawal amount field moves focus to the explicit Withdraw button. Treasury transfers show source, destination and amount before confirmation; Cancel is initially focused, and political invalidation clears the review. Trade draws slot frames from the menu's positions and shows virtual coins separately from physical items. NPC catalogues show per-lot terms, matching inventory, and a separate purchase or sale review.
 
 Run native client checks with an approved artifact:
 
@@ -76,7 +76,7 @@ capturing source/artifact provenance; merely rebuilding the same version is insu
 See the shared `../docs/UI-IMPLEMENTATION-STATUS.md` E1 record for exact evidence.
 
 `./gradlew runUiTest test build --no-daemon --console=plain` uses the approved
-sibling JAR, checks 54 native client layouts and runs required Fabric server
+sibling JAR, checks native client layouts in both languages and runs required Fabric server
 GameTests in `build/run/gameTest/world` only. Server regressions cover Nations
 ownership/financial policies and revocation, transactional balance rollback,
 transfer/overflow, player-NBT balance persistence, conversion/inventory-full

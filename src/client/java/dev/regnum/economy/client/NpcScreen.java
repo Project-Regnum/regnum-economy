@@ -22,6 +22,7 @@ final class NpcScreen extends Screen {
     private final List<KingdomUi.RoyalButton> choices = new ArrayList<>();
     private EditBox input;
     private Paragraph paragraph;
+    private NpcShopPanel shopPanel;
     private int itemX;
     private int itemY;
     private String displayName;
@@ -42,6 +43,7 @@ final class NpcScreen extends Screen {
         feedback = Component.empty();
         input = null;
         paragraph = null;
+        shopPanel = null;
         choices.clear();
         rebuildWidgets();
     }
@@ -63,9 +65,21 @@ final class NpcScreen extends Screen {
         double offset = paragraph == null ? 0 : paragraph.offset();
         choices.clear();
         input = null;
-        bounds = KingdomUi.folioBounds(width, height, 424, 280);
+        int maxHeight = page.shop() == null ? 280 : page.shop().review() ? 208 : 224;
+        bounds = KingdomUi.folioBounds(width, height, 424, maxHeight);
         int left = bounds.left(), content = bounds.contentWidth();
         displayName = KingdomUi.ellipsize(font, page.name(), content);
+        if (page.shop() != null) {
+            shopPanel = new NpcShopPanel(font, page, bounds);
+            choices.addAll(shopPanel.buttons(this::select, this::onClose, sentAt != 0));
+            choices.forEach(this::addRenderableWidget);
+            if (focused >= 0 && focused < choices.size() && choices.get(focused).active) {
+                setInitialFocus(choices.get(focused));
+            } else {
+                choices.stream().filter(button -> button.active).findFirst().ifPresent(this::setInitialFocus);
+            }
+            return;
+        }
         int count = page.choices().size() + 1;
         int stride = KingdomUi.CONTROL + KingdomUi.GAP;
         int actionsTop = bounds.footerY() - (Math.ceilDiv(count, 2) - 1) * stride;
@@ -110,7 +124,8 @@ final class NpcScreen extends Screen {
         if (sentAt != 0 || !ClientPlayNetworking.canSend(NpcPackets.Select.TYPE)) return;
         sentAt = Util.getMillis();
         feedback = Component.translatable("npc.regnum-economy.pending");
-        for (int i = 0; i < choices.size() - 1; i++) choices.get(i).active = false;
+        int serverControls = page.shop() != null && page.shop().review() ? choices.size() : choices.size() - 1;
+        for (int i = 0; i < serverControls; i++) choices.get(i).active = false;
         if (input != null) input.setEditable(false);
         ClientPlayNetworking.send(new NpcPackets.Select(page.token(), choice, input == null ? "" : input.getValue()));
     }
@@ -126,7 +141,9 @@ final class NpcScreen extends Screen {
     @Override public boolean isPauseScreen() { return false; }
 
     @Override public Component getNarrationMessage() {
-        return page.name().copy().append(". ").append(page.role()).append(". ").append(feedback);
+        var message = page.name().copy().append(". ").append(page.role()).append(". ");
+        if (page.shop() != null) message.append(shopPanel.narration()).append(". ");
+        return message.append(feedback);
     }
 
     @Override public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float delta) { }
@@ -135,18 +152,23 @@ final class NpcScreen extends Screen {
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
         graphics.fill(0, 0, width, height, KingdomUi.BACKGROUND);
         KingdomUi.frame(graphics, font, page.name(), bounds.x(), bounds.y(), bounds.width(), bounds.height());
-        KingdomUi.heading(graphics, font, page.role(), bounds.left(), bounds.y() + 38, bounds.contentWidth());
-        if (!page.item().isEmpty()) {
+        if (shopPanel != null) {
+            shopPanel.render(graphics, feedback);
+        } else {
+            KingdomUi.heading(graphics, font, page.role(), bounds.left(), bounds.y() + 38, bounds.contentWidth());
+        }
+        if (shopPanel == null && !page.item().isEmpty()) {
             KingdomUi.panel(graphics, itemX - 3, itemY - 3, itemX + 19, itemY + 19);
             graphics.renderItem(page.item(), itemX, itemY);
         }
-        if (sentAt != 0) {
+        if (shopPanel == null && sentAt != 0) {
             int y = paragraph.getBottom() + 4;
             graphics.drawString(font, KingdomUi.ellipsize(font, feedback, bounds.contentWidth()),
                     bounds.left(), y, KingdomUi.GOLD, false);
         }
         super.render(graphics, mouseX, mouseY, delta);
-        if (!page.item().isEmpty() && mouseX >= itemX - 3 && mouseX < itemX + 19 && mouseY >= itemY - 3 && mouseY < itemY + 19) {
+        if (shopPanel != null) shopPanel.renderTooltip(graphics, mouseX, mouseY);
+        if (shopPanel == null && !page.item().isEmpty() && mouseX >= itemX - 3 && mouseX < itemX + 19 && mouseY >= itemY - 3 && mouseY < itemY + 19) {
             graphics.renderTooltip(font, page.item(), mouseX, mouseY);
         } else if (!displayName.equals(page.name().getString()) && mouseX >= bounds.left() && mouseX <= bounds.right()
                 && mouseY >= bounds.y() + 8 && mouseY <= bounds.y() + 26) {

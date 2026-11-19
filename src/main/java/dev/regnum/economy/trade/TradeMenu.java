@@ -19,10 +19,18 @@ import java.util.ArrayList;
 import java.util.List;
 
 public final class TradeMenu extends AbstractContainerMenu {
-    public static final int INVENTORY_X = 42;
-    public static final int INVENTORY_Y = 156;
+    public static final int SLOT_SIZE = 16;
+    public static final int SLOT_PITCH = 18;
+    public static final int OFFER_COLUMNS = 3;
+    public static final int OFFER_SLOTS = 9;
+    public static final int OWN_OFFER_X = 17;
+    public static final int OTHER_OFFER_X = 164;
+    public static final int OFFER_Y = 40;
+    public static final int INVENTORY_X = 17;
+    public static final int INVENTORY_Y = 157;
+    public static final int INVENTORY_COLUMNS = 9;
+    public static final int HOTBAR_OFFSET = 58;
 
-    static final int OFFER_SLOTS = 9;
     private static final int INVENTORY_START = 2 * OFFER_SLOTS;
     private static MenuType<TradeMenu> type;
 
@@ -59,22 +67,22 @@ public final class TradeMenu extends AbstractContainerMenu {
         this.ownItems = ownItems;
         this.otherItems = otherItems;
 
-        addOfferSlots(ownItems, 33, true);
-        addOfferSlots(otherItems, 157, false);
+        addOfferSlots(ownItems, OWN_OFFER_X, true);
+        addOfferSlots(otherItems, OTHER_OFFER_X, false);
         for (int row = 0; row < 3; row++) {
-            for (int column = 0; column < 9; column++) {
-                addSlot(new Slot(inventory, 9 + row * 9 + column,
-                        INVENTORY_X + column * 18, INVENTORY_Y + row * 18));
+            for (int column = 0; column < INVENTORY_COLUMNS; column++) {
+                addSlot(new Slot(inventory, (row + 1) * INVENTORY_COLUMNS + column,
+                        INVENTORY_X + column * SLOT_PITCH, INVENTORY_Y + row * SLOT_PITCH));
             }
         }
-        for (int column = 0; column < 9; column++) {
-            addSlot(new Slot(inventory, column, INVENTORY_X + column * 18, INVENTORY_Y + 58));
+        for (int column = 0; column < INVENTORY_COLUMNS; column++) {
+            addSlot(new Slot(inventory, column, INVENTORY_X + column * SLOT_PITCH, INVENTORY_Y + HOTBAR_OFFSET));
         }
     }
 
     private void addOfferSlots(SimpleContainer items, int x, boolean owned) {
         for (int i = 0; i < OFFER_SLOTS; i++) {
-            addSlot(new Slot(items, i, x + i % 3 * 18, 31 + i / 3 * 18) {
+            addSlot(new Slot(items, i, x + i % OFFER_COLUMNS * SLOT_PITCH, OFFER_Y + i / OFFER_COLUMNS * SLOT_PITCH) {
                 @Override
                 public boolean mayPlace(ItemStack stack) {
                     return owned && !locked();

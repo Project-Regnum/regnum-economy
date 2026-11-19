@@ -13,11 +13,16 @@ public record NpcRole(ResourceLocation id, String translation, Feature feature, 
 
     public static final NpcRole GENERIC = builtin("generic", Feature.DIALOGUE, NpcAppearance.DEFAULT);
     public static final NpcRole MERCHANT = builtin("merchant", Feature.MERCHANT, NpcAppearance.MERCHANT);
+    public static final NpcRole BUYER = builtin("buyer", Feature.BUYER, NpcAppearance.MERCHANT);
     public static final NpcRole BANKER = builtin("banker", Feature.WALLET, NpcAppearance.BANKER);
     public static final NpcRole OFFICIAL = builtin("official", Feature.CITY, NpcAppearance.OFFICIAL);
     public static final NpcRole GUARD = builtin("guard", Feature.DIALOGUE, NpcAppearance.GUARD);
 
-    public enum Feature { DIALOGUE, MERCHANT, WALLET, CITY }
+    public enum Feature { DIALOGUE, MERCHANT, WALLET, CITY, BUYER }
+
+    public boolean usesMerchantStock() {
+        return feature == Feature.MERCHANT || feature == Feature.BUYER;
+    }
 
     public NpcRole {
         Objects.requireNonNull(id);

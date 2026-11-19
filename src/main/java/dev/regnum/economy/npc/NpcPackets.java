@@ -15,6 +15,7 @@ import net.minecraft.world.item.ItemStack;
 
 public final class NpcPackets {
     public static final int MAX_CHOICES = 8;
+    public static final int SHOP_PAGE_SIZE = 3;
 
     private NpcPackets() { }
 
@@ -32,12 +33,56 @@ public final class NpcPackets {
         @Override public Type<Select> type() { return TYPE; }
     }
 
+    public enum ShopView { CATALOGUE, BUYER, PURCHASE, SALE }
+
+    public enum ShopAction { FIRST, SECOND, THIRD, BUY, SELL, PREVIOUS, NEXT, BACK, CANCEL, CONFIRM }
+
+    public record Shop(ShopView view, long wallet, List<ItemStack> listings, int selected, int page, int pages,
+                       int quantity, int stock, int matching, long ask, long bid, Component buyIssue,
+                       Component sellIssue, List<ShopAction> actions) {
+        private static final StreamCodec<RegistryFriendlyByteBuf, List<ItemStack>> LISTINGS =
+                ItemStack.STREAM_CODEC.apply(ByteBufCodecs.list(SHOP_PAGE_SIZE));
+
+        private void write(RegistryFriendlyByteBuf buffer) {
+            buffer.writeEnum(view);
+            buffer.writeVarLong(wallet);
+            LISTINGS.encode(buffer, listings);
+            buffer.writeVarInt(selected);
+            buffer.writeVarInt(page);
+            buffer.writeVarInt(pages);
+            buffer.writeVarInt(quantity);
+            buffer.writeVarInt(stock);
+            buffer.writeVarInt(matching);
+            buffer.writeVarLong(ask);
+            buffer.writeVarLong(bid);
+            ComponentSerialization.STREAM_CODEC.encode(buffer, buyIssue);
+            ComponentSerialization.STREAM_CODEC.encode(buffer, sellIssue);
+            buffer.writeCollection(actions, (buf, action) -> buf.writeEnum(action));
+        }
+
+        private static Shop read(RegistryFriendlyByteBuf buffer) {
+            return new Shop(buffer.readEnum(ShopView.class), buffer.readVarLong(), LISTINGS.decode(buffer),
+                    buffer.readVarInt(), buffer.readVarInt(), buffer.readVarInt(), buffer.readVarInt(), buffer.readVarInt(),
+                    buffer.readVarInt(), buffer.readVarLong(), buffer.readVarLong(),
+                    ComponentSerialization.STREAM_CODEC.decode(buffer), ComponentSerialization.STREAM_CODEC.decode(buffer),
+                    buffer.readCollection(net.minecraft.network.FriendlyByteBuf.limitValue(java.util.ArrayList::new, MAX_CHOICES),
+                            buf -> buf.readEnum(ShopAction.class)));
+        }
+
+        public boolean review() { return view == ShopView.PURCHASE || view == ShopView.SALE; }
+    }
+
     public record Page(UUID token, Component name, Component role, Component body, ItemStack item,
-                       List<Component> choices, int inputLimit, Component inputHint, String inputValue)
+                       List<Component> choices, int inputLimit, Component inputHint, String inputValue, Shop shop)
             implements CustomPacketPayload {
-        public static final Type<Page> TYPE = new Type<>(RegnumEconomy.id("npc_page"));
+        public static final Type<Page> TYPE = new Type<>(RegnumEconomy.id("npc_page_v2"));
         private static final StreamCodec<RegistryFriendlyByteBuf, List<Component>> CHOICES =
                 ComponentSerialization.STREAM_CODEC.apply(ByteBufCodecs.list(MAX_CHOICES));
+
+        public Page(UUID token, Component name, Component role, Component body, ItemStack item,
+                    List<Component> choices, int inputLimit, Component inputHint, String inputValue) {
+            this(token, name, role, body, item, choices, inputLimit, inputHint, inputValue, null);
+        }
 
         public static final StreamCodec<RegistryFriendlyByteBuf, Page> CODEC =
                 StreamCodec.of((buffer, page) -> {
@@ -50,11 +95,13 @@ public final class NpcPackets {
                     buffer.writeVarInt(page.inputLimit());
                     ComponentSerialization.STREAM_CODEC.encode(buffer, page.inputHint());
                     buffer.writeUtf(page.inputValue(), RegnumNpc.DIALOGUE_LIMIT);
+                    buffer.writeBoolean(page.shop() != null);
+                    if (page.shop() != null) page.shop().write(buffer);
                 }, buffer -> new Page(buffer.readUUID(), ComponentSerialization.STREAM_CODEC.decode(buffer),
                         ComponentSerialization.STREAM_CODEC.decode(buffer), ComponentSerialization.STREAM_CODEC.decode(buffer),
                         ItemStack.OPTIONAL_STREAM_CODEC.decode(buffer), CHOICES.decode(buffer),
                         buffer.readVarInt(), ComponentSerialization.STREAM_CODEC.decode(buffer),
-                        buffer.readUtf(RegnumNpc.DIALOGUE_LIMIT)));
+                        buffer.readUtf(RegnumNpc.DIALOGUE_LIMIT), buffer.readBoolean() ? Shop.read(buffer) : null));
 
         @Override public Type<Page> type() { return TYPE; }
     }

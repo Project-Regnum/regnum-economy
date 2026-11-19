@@ -35,6 +35,74 @@ import net.minecraft.world.phys.Vec3;
 
 public final class NpcIntegrationTests implements FabricGameTest {
     @GameTest(template = EMPTY_STRUCTURE, batch = "npc_integration")
+    public void buyerUsesBidAndRejectsChangedTermsWithoutMovingAssets(GameTestHelper h) throws Exception {
+        var owner = TestPlayers.create(h);
+        var visitor = TestPlayers.create(h);
+        var position = aboveTest(h);
+        owner.setPos(position);
+        visitor.setPos(position.add(2, 0, 0));
+        var players = owner.server.getPlayerList();
+        players.getOps().add(new net.minecraft.server.players.ServerOpListEntry(owner.getGameProfile(), 2, false));
+        try {
+            var dispatcher = owner.server.getCommands().getDispatcher();
+            var source = owner.createCommandSourceStack();
+            h.assertTrue(dispatcher.execute("economy npc create regnum-economy:buyer Miller", source) == 1,
+                    "The placement command accepts the buyer role");
+            var npc = h.getLevel().getEntitiesOfClass(RegnumNpc.class, owner.getBoundingBox().inflate(4),
+                    entity -> entity.role() == NpcRole.BUYER && owner.getUUID().equals(entity.proprietor())).getFirst();
+            var wheat = new ItemStack(Items.WHEAT, 4);
+            wheat.set(DataComponents.CUSTOM_NAME, Component.literal("Miller's wheat"));
+            owner.getInventory().setItem(0, wheat.copy());
+            visitor.getInventory().setItem(0, wheat.copy());
+            visitor.getInventory().setItem(1, new ItemStack(Items.WHEAT, 6));
+            String id = npc.getStringUUID();
+            var catalog = NpcMerchants.catalog(owner, npc);
+            h.assertTrue(dispatcher.execute("economy npc offer " + id + " 2 10 6", source) == 0
+                    && catalog.goods().isEmpty(), "The buyer rejects an ask price");
+            h.assertTrue(dispatcher.execute("economy npc offer " + id + " 2 0 6", source) == 1,
+                    "The existing offer command sets the buyer's bid");
+            credit(h, owner, 100);
+            h.assertTrue(dispatcher.execute("economy npc funds deposit " + id + " 30", source) == 1
+                    && CoinBalances.get(owner) == 70, "The existing funds command funds wilderness buyer escrow");
+            h.assertTrue(dev.regnum.economy.inventory.InventoryPlan.countMatching(visitor.getInventory(), wheat) == 4,
+                    "Only the exact components count toward an offer");
+
+            var reviewed = quote(owner, npc);
+            UUID stale = buyerConfirmation(h, visitor, npc, reviewed, Result.STALE);
+            h.assertTrue(dispatcher.execute("economy npc offer " + id + " 2 0 8", source) == 1, "Operator changes the bid");
+            NpcInteractions.select(visitor, new NpcPackets.Select(stale, 0, ""));
+            var afterRejection = NpcMerchants.catalog(owner, npc);
+            h.assertTrue(ItemStack.matches(visitor.getMainHandItem(), wheat) && CoinBalances.get(visitor) == 0
+                    && afterRejection.goods().getFirst().stock() == 0 && afterRejection.funds() == 30,
+                    "Rejected sale leaves inventory, wallet, stock and escrow unchanged");
+
+            var current = afterRejection.goods().getFirst();
+            var confirmation = new NpcPackets.Select(buyerConfirmation(h, visitor, npc, current, Result.SUCCESS), 0, "");
+            NpcInteractions.select(visitor, confirmation);
+            NpcInteractions.select(visitor, confirmation);
+            var afterSale = NpcMerchants.catalog(owner, npc);
+            h.assertTrue(ItemStack.matches(visitor.getMainHandItem(), wheat.copyWithCount(2))
+                    && visitor.getInventory().getItem(1).getCount() == 6 && CoinBalances.get(visitor) == 8
+                    && afterSale.goods().getFirst().stock() == 2 && afterSale.funds() == 22,
+                    "One confirmed lot moves only matching items into stock and pays copper once from the escrow");
+            h.assertTrue(NpcMerchants.trade(visitor, npc,
+                    new NpcMerchants.Quote(current.id(), current.item(), 2, 1, 8, 2), true) == Result.STALE,
+                    "The settlement entry point refuses purchases from a buyer");
+            h.assertTrue(dispatcher.execute("economy npc remove " + id, source) == 0 && npc.isAlive(),
+                    "Buyer removal protects remaining stock and funds");
+        } finally {
+            players.deop(owner.getGameProfile());
+        }
+        h.succeed();
+    }
+
+    private static UUID buyerConfirmation(GameTestHelper h, ServerPlayer visitor, RegnumNpc npc,
+                                          NpcMerchants.Quote quote, Result expected) {
+        return NpcInteractions.issue(visitor, npc, false, 0, List.of(new NpcInteractions.Choice(Component.empty(),
+                ignored -> h.assertTrue(NpcMerchants.trade(visitor, npc, quote, false) == expected, "Buyer checks the reviewed terms"))));
+    }
+
+    @GameTest(template = EMPTY_STRUCTURE, batch = "npc_integration")
     public void createdNpcUsesVanillaIdentityAndRejectsMalformedOrDuplicateData(GameTestHelper h) throws Exception {
         var proprietor = TestPlayers.create(h);
         var visitor = TestPlayers.create(h);
@@ -411,19 +479,22 @@ public final class NpcIntegrationTests implements FabricGameTest {
             NpcPackets.Select.CODEC.encode(buffer, request);
             h.assertTrue(NpcPackets.Select.CODEC.decode(buffer).equals(request), "Client selection retains its token, index and input");
             buffer.clear();
-            var page = new NpcPackets.Page(token, Component.literal("Merchant"), NpcRole.MERCHANT.label(),
-                    Npcs.text("merchant.confirm_buy", 2, Component.literal("Stone"), "10"), new ItemStack(Items.STONE, 2),
-                    List.of(Npcs.text("cancel"), Npcs.text("confirm")), 0, Component.empty(), "");
+            var sample = new ItemStack(Items.STONE);
+            sample.set(DataComponents.CUSTOM_NAME, Component.literal("Cut stone"));
+            var shop = new NpcPackets.Shop(NpcPackets.ShopView.BUYER, Long.MAX_VALUE, List.of(sample), 0, 1, 1,
+                    2, 5, 9, 0, 12, Component.empty(), Npcs.text("shop.no_escrow"), List.of(NpcPackets.ShopAction.FIRST));
+            var page = new NpcPackets.Page(token, Component.literal("Buyer"), NpcRole.BUYER.label(),
+                    Npcs.text("result.stale"), sample, List.of(sample.getHoverName()), 0, Component.empty(), "", shop);
             NpcPackets.Page.CODEC.encode(buffer, page);
             var decoded = NpcPackets.Page.CODEC.decode(buffer);
             h.assertTrue(decoded.token().equals(token), "Server page retains its token");
             h.assertTrue(decoded.choices().equals(page.choices()), "Server page retains its action labels");
-            h.assertTrue(ItemStack.matches(decoded.item(), page.item()), "Server page retains its exact item lot");
-            // Vanilla canonicalizes numeric translation arguments to strings on the
-            // wire. Compare their complete serialized meaning, not Java arg types.
-            h.assertTrue(Component.Serializer.toJson(decoded.body(), h.getLevel().registryAccess())
-                    .equals(Component.Serializer.toJson(page.body(), h.getLevel().registryAccess())),
-                    "Server page retains the complete translated confirmation terms");
+            h.assertTrue(ItemStack.matches(decoded.item(), page.item()) && ItemStack.matches(decoded.shop().listings().getFirst(), sample),
+                    "Both the selected item and catalogue entry keep exact components");
+            h.assertTrue(decoded.shop().view() == shop.view() && decoded.shop().quantity() == 2 && decoded.shop().bid() == 12
+                    && decoded.shop().matching() == 9 && decoded.shop().stock() == 5 && decoded.shop().wallet() == Long.MAX_VALUE
+                    && decoded.shop().actions().equals(shop.actions()) && decoded.shop().sellIssue().equals(shop.sellIssue()),
+                    "The page carries buyer terms, availability, and server-issued action order");
             buffer.clear();
             buffer.writeUUID(token);
             buffer.writeVarInt(0);
@@ -439,7 +510,7 @@ public final class NpcIntegrationTests implements FabricGameTest {
     }
 
     @GameTest(template = EMPTY_STRUCTURE, batch = "npc_integration")
-    public void allFiveRolesSupportCreationConfigurationActivationAndRemoval(GameTestHelper h) throws Exception {
+    public void allRolesSupportCreationConfigurationActivationAndRemoval(GameTestHelper h) throws Exception {
         var owner = TestPlayers.create(h);
         var visitor = TestPlayers.create(h);
         var position = aboveTest(h);
@@ -448,7 +519,7 @@ public final class NpcIntegrationTests implements FabricGameTest {
         var players = owner.server.getPlayerList();
         players.getOps().add(new net.minecraft.server.players.ServerOpListEntry(owner.getGameProfile(), 2, false));
         try {
-            for (var role : new NpcRole[]{NpcRole.MERCHANT, NpcRole.BANKER, NpcRole.OFFICIAL, NpcRole.GUARD, NpcRole.GENERIC}) {
+            for (var role : new NpcRole[]{NpcRole.MERCHANT, NpcRole.BUYER, NpcRole.BANKER, NpcRole.OFFICIAL, NpcRole.GUARD, NpcRole.GENERIC}) {
                 var npc = Npcs.create(owner, role, "Role fixture");
                 h.assertTrue(npc != null && npc.role() == role && npc.appearance() == role.appearance()
                         && Npcs.canInteract(visitor, npc), "Create each built-in role with its intended appearance");
