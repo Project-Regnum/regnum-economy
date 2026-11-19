@@ -3,6 +3,7 @@ package dev.regnum.economy.money;
 import com.mojang.serialization.Codec;
 import dev.regnum.economy.RegnumEconomy;
 import dev.regnum.economy.integration.AuthAccess;
+import dev.regnum.economy.inventory.InventoryPlan;
 import net.fabricmc.fabric.api.attachment.v1.AttachmentRegistry;
 import net.fabricmc.fabric.api.attachment.v1.AttachmentType;
 import net.minecraft.server.level.ServerPlayer;
@@ -39,11 +40,14 @@ public final class DungeonRewards {
         if (player.containerMenu != player.inventoryMenu || !player.containerMenu.getCarried().isEmpty()
                 || !player.inventoryMenu.getCraftSlots().isEmpty()) return false;
 
+        var inventory = new InventoryPlan(player.getInventory());
+        for (ItemStack stack : loot) {
+            if (!inventory.add(stack).isEmpty()) return false;
+        }
+
         try (var operation = WalletPersistence.begin(player)) {
             if (coins > 0 && !CoinBalances.credit(player, coins)) return false;
-            for (ItemStack stack : loot) {
-                if (!player.getInventory().add(stack.copy())) return false;
-            }
+            inventory.apply();
             var next = new ArrayList<>(previous);
             next.add(receipt);
             player.setAttached(RECEIPTS, List.copyOf(next));
