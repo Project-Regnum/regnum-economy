@@ -19,13 +19,16 @@ jobs:
           path: regnum-economy
       - name: validate gradle wrapper
         uses: gradle/actions/wrapper-validation@v6
-      - name: setup build and Minecraft jdks
+      - name: set up the pinned Nations compiler and Minecraft runtime
         uses: actions/setup-java@v5
         with:
-          java-version: |
-            21
-            25
-          distribution: 'microsoft'
+          java-version: '21.0.12.1+1'
+          distribution: temurin
+      - name: set up JDK 25 for Gradle and Loom
+        uses: actions/setup-java@v5
+        with:
+          java-version: '25'
+          distribution: temurin
       - name: read Nations source lock
         id: nations
         run: sed -n 's/^nations_api_commit=/commit=/p' gradle.properties >> "$GITHUB_OUTPUT"
@@ -38,6 +41,8 @@ jobs:
       - name: provision Nations dependency
         working-directory: regnum-nations
         run: bash ./gradlew remapJar --no-daemon --console=plain
+      - name: verify provisioned Nations content
+        run: bash ./gradlew verifyNationsDependency --no-daemon --console=plain
       - name: make gradle wrapper executable
         run: chmod +x ./gradlew
       - name: build

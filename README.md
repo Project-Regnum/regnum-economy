@@ -39,16 +39,24 @@ Political changes invalidate open treasury contexts. Funds belonging to dissolve
 
 Use JDK 25 for Gradle; the mod targets Java 21. Economy consumes the existing sibling Nations project output at `../regnum-nations/build/libs/regnum-nations-0.12.0.jar`. Run `./gradlew test build` (Windows: `.\gradlew.bat test build`). Override the sibling directory with `-Pnations_project=<directory>` or supply a prebuilt artifact with `-Pnations_jar=<jar>`. Neither override changes the compatibility lock. The Nations dependency remains a separate installed mod.
 
-For a fresh checkout, build Nations commit `b28e35866407645c94437129a29e63d0c53283b4` using JDK 25 and `./gradlew remapJar --no-daemon --console=plain` in a separate sibling checkout. CI does this automatically, then runs Economy's `test build`. Economy’s `build` now includes required headless integration GameTests; Nations dependency provisioning alone still runs only `remapJar`. Economy does not automatically rebuild Nations, so an existing artifact or modified sibling checkout is never overwritten during synchronization/build.
+For a fresh checkout, build Nations commit `e093a18e868a085995bfe4e326c4c0b8c6084275` using
+JDK 25 for Gradle and the Temurin `21.0.12.1+1` compiler. In a separate
+checkout of the pinned source run `./gradlew remapJar --no-daemon --console=plain`.
+CI provisions and verifies that build before running Economy's complete build.
+Economy consumes the supplied artifact without rebuilding a sibling checkout.
 
-Two Nations 0.12.0 artifacts are explicitly approved by normalized JAR-content SHA-256:
+The approved normalized Nations JAR-content SHA-256 is
+`ad8be2dfc66f7844a68f391e0eee4948f612717b8e5d714044032a7d83f17ce9`. The local and CI lock
+properties reference the same clean build. Both Gradle and Fabric prelaunch
+verify the archive's contents, and Fabric metadata requires Nations 0.12.0.
+ZIP timestamps or compression can differ. Install the same approved artifact
+on the server and clients. Loom development runs verify the original input JAR.
 
-- Reviewed E1 local build (uncommitted Nations checkout): `3459e8d87ca7c3c59468a5123564cb60d939c78b1e3a4a4cbf50e7bd7242d07d`.
-- Clean build of the pinned commit (CI): `0431e6d09b1a7c06bfd6360cddf03b9ba21607a788003890f7e73aeb40170daf`.
-
-The existing artifact contains local implementation edits that are absent from the pinned source commit. Its API class bytes match the clean build; both full artifacts are locked, rather than trusting arbitrary builds with the same API or version. Both the build and an early, server-safe startup check reject different content with installation guidance; matching a version string is insufficient. Use the same verified artifact on both sides. ZIP timestamps/compression may differ; different compiled content requires an explicitly reviewed compatibility-lock update. Loom development runs verify the original dependency JAR supplied by the build. Fabric metadata also requires the locked Nations version.
-
-The 0.12.0 common API retains the PR #20 contract (scoped identities, permissions, territory queries, provider registration and change events). Client panel registration/context contracts remain present, and `NationsIdentity` adds a drawing helper. Common and client compilation against the verified artifact checks Economy's consumed signatures; gameplay and crash-recovery behavior still require runtime verification.
+The Nations API v1 common and client panel signatures remain compatible with
+Economy. World delivers dungeon rewards through Economy's wallet journal,
+which commits the receipt, inventory and credit together. A paid receipt is
+acknowledged on retry without delivering anything twice. Unpaid rewards wait
+until the player can safely checkpoint their inventory.
 
 ### Economy UI verification
 
@@ -61,24 +69,3 @@ Run native client checks with an approved artifact:
 ```
 
 `runUiTest` uses a disposable `build/run/uiTest` directory and synthetic snapshots in EN/UK at 320×240, 640×360 and 1100×760. It checks layout, mode visibility, explicit submission, stale replies/reviews, permissions and market command suggestions, and writes captures under `checks/captures/`. It does not perform transfers or validate escrow/crash recovery in multiplayer. The standard `test` task still has no JUnit test sources. Neither task changes the Nations compatibility lock.
-
-### E1 local artifact approval
-
-The explicitly reviewed local artifact remains Nations 0.12.0 at base commit
-`b28e35866407645c94437129a29e63d0c53283b4` **plus uncommitted B/D/E1 changes**.
-The commit is not claimed to reproduce the dirty local release. The separate CI
-fingerprint still names the clean commit and was not changed. Approval uses the
-existing `nations_content_sha256` property, packaged compatibility properties,
-and unchanged build/prelaunch verifiers; neither path accepts arbitrary artifacts.
-The prior local artifact is replaced in the allowlist. Reapproval requires reviewing
-API/consumed signatures, required tests, matching client/server artifacts and
-capturing source/artifact provenance; merely rebuilding the same version is insufficient.
-See the shared `../docs/UI-IMPLEMENTATION-STATUS.md` E1 record for exact evidence.
-
-`./gradlew runUiTest test build --no-daemon --console=plain` uses the approved
-sibling JAR, checks 54 native client layouts and runs required Fabric server
-GameTests in `build/run/gameTest/world` only. Server regressions cover Nations
-ownership/financial policies and revocation, transactional balance rollback,
-transfer/overflow, player-NBT balance persistence, conversion/inventory-full
-rejection and escrow persistence/recovery without duplicate returns. They do not
-replace live multiplayer or process-crash recovery testing.

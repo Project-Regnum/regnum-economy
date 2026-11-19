@@ -382,7 +382,7 @@ public final class NpcIntegrationTests implements FabricGameTest {
         var inventory = owner.getInventory().save(new net.minecraft.nbt.ListTag());
         java.nio.file.Files.move(directory, backup);
         try {
-            // A real filesystem error in writeAtomic, before the journal commit point.
+            // Block the journal directory before the transaction can commit.
             java.nio.file.Files.createFile(directory);
             h.assertTrue(NpcMerchants.trade(owner, npc, quote(owner, npc), true) == Result.SAVE_FAILED,
                     "A journal write failure is reported as an unsuccessful trade");

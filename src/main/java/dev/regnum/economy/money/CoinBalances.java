@@ -60,6 +60,7 @@ public final class CoinBalances {
     }
 
     public static void register() {
+        DungeonRewards.register();
         WalletPersistence.registerPlayerState(player -> {
             Long before = player.getAttached(BALANCE);
             return () -> player.setAttached(BALANCE, before);

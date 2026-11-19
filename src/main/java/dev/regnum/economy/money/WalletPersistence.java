@@ -270,6 +270,11 @@ public final class WalletPersistence {
         Path journal = server.getWorldPath(LevelResource.ROOT).resolve(JOURNAL);
         boolean committed = false;
         try {
+            // A regular file cannot contain a journal. Fail this operation without
+            // entering recovery lockout, so it can be retried once storage is repaired.
+            if (Files.isRegularFile(journal.getParent(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                throw new IOException("Economy journal directory is blocked by a file");
+            }
             if (!Files.notExists(journal)) {
                 LOCKED.add(server);
                 server.halt(false);
