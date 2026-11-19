@@ -39,7 +39,7 @@ Political changes invalidate open treasury contexts. Funds belonging to dissolve
 
 Use JDK 25 for Gradle; the mod targets Java 21. Economy consumes the existing sibling Nations project output at `../regnum-nations/build/libs/regnum-nations-0.12.0.jar`. Run `./gradlew test build` (Windows: `.\gradlew.bat test build`). Override the sibling directory with `-Pnations_project=<directory>` or supply a prebuilt artifact with `-Pnations_jar=<jar>`. Neither override changes the compatibility lock. The Nations dependency remains a separate installed mod.
 
-For a fresh checkout, build Nations commit `e093a18e868a085995bfe4e326c4c0b8c6084275` using
+For a fresh checkout, build Nations commit `425bc3a9772beb405146753ef1ff1f8635132cdd` using
 JDK 25 for Gradle and the Temurin `21.0.12.1+1` compiler. In a separate
 checkout of the pinned source run `./gradlew remapJar --no-daemon --console=plain`.
 CI provisions and verifies that build before running Economy's complete build.
